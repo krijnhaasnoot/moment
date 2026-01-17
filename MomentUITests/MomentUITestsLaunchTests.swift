@@ -2,7 +2,7 @@
 //  MomentUITestsLaunchTests.swift
 //  MomentUITests
 //
-//  Created by Krijn Haasnoot on 16/01/2026.
+//  Launch performance tests
 //
 
 import XCTest
@@ -29,5 +29,14 @@ final class MomentUITestsLaunchTests: XCTestCase {
         attachment.name = "Launch Screen"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+    
+    @MainActor
+    func testLaunchPerformance() throws {
+        if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
+            measure(metrics: [XCTApplicationLaunchMetric()]) {
+                XCUIApplication().launch()
+            }
+        }
     }
 }

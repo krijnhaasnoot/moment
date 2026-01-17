@@ -6,6 +6,15 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		EFDBB2232F1A47F500A6585B /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2222F1A47F500A6585B /* Auth */; };
+		EFDBB2252F1A47F500A6585B /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2242F1A47F500A6585B /* Functions */; };
+		EFDBB2272F1A47F500A6585B /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2262F1A47F500A6585B /* PostgREST */; };
+		EFDBB2292F1A47F500A6585B /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2282F1A47F500A6585B /* Realtime */; };
+		EFDBB22B2F1A47F500A6585B /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB22A2F1A47F500A6585B /* Storage */; };
+		EFDBB22D2F1A47F500A6585B /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB22C2F1A47F500A6585B /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		EFDBB1E52F1A42FE00A6585B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -29,9 +38,22 @@
 		EFDBB1EE2F1A42FE00A6585B /* MomentUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MomentUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		EF758D172F1A7293008EDB49 /* Exceptions for "Moment" folder in "Moment" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = EFDBB1D62F1A42FD00A6585B /* Moment */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		EFDBB1D92F1A42FD00A6585B /* Moment */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EF758D172F1A7293008EDB49 /* Exceptions for "Moment" folder in "Moment" target */,
+			);
 			path = Moment;
 			sourceTree = "<group>";
 		};
@@ -52,6 +74,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EFDBB2272F1A47F500A6585B /* PostgREST in Frameworks */,
+				EFDBB2252F1A47F500A6585B /* Functions in Frameworks */,
+				EFDBB22D2F1A47F500A6585B /* Supabase in Frameworks */,
+				EFDBB2232F1A47F500A6585B /* Auth in Frameworks */,
+				EFDBB22B2F1A47F500A6585B /* Storage in Frameworks */,
+				EFDBB2292F1A47F500A6585B /* Realtime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +140,12 @@
 			);
 			name = Moment;
 			packageProductDependencies = (
+				EFDBB2222F1A47F500A6585B /* Auth */,
+				EFDBB2242F1A47F500A6585B /* Functions */,
+				EFDBB2262F1A47F500A6585B /* PostgREST */,
+				EFDBB2282F1A47F500A6585B /* Realtime */,
+				EFDBB22A2F1A47F500A6585B /* Storage */,
+				EFDBB22C2F1A47F500A6585B /* Supabase */,
 			);
 			productName = Moment;
 			productReference = EFDBB1D72F1A42FD00A6585B /* Moment.app */;
@@ -195,6 +229,9 @@
 			);
 			mainGroup = EFDBB1CE2F1A42FD00A6585B;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EFDBB1D82F1A42FD00A6585B /* Products */;
 			projectDirPath = "";
@@ -395,16 +432,22 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Moment/Moment.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 9V592235FH;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Moment/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Moment by Kinder";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -412,6 +455,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kinder.Moment;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -427,16 +471,22 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Moment/Moment.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 9V592235FH;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Moment/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Moment by Kinder";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -444,6 +494,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kinder.Moment;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -578,6 +629,50 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		EFDBB2222F1A47F500A6585B /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		EFDBB2242F1A47F500A6585B /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		EFDBB2262F1A47F500A6585B /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		EFDBB2282F1A47F500A6585B /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		EFDBB22A2F1A47F500A6585B /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		EFDBB22C2F1A47F500A6585B /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = EFDBB1CF2F1A42FD00A6585B /* Project object */;
 }
