@@ -208,3 +208,161 @@ struct CycleHistoryTests {
         #expect(average == 28)
     }
 }
+
+// MARK: - Luteal Learning Tests
+
+@Suite("Luteal Phase Learning Tests")
+struct LutealLearningTests {
+    
+    @Test("Personalized luteal length affects ovulation estimate")
+    func personalizedLutealAffectsOvulation() {
+        // Default luteal (14 days)
+        let defaultCycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 14)
+        #expect(defaultCycle.estimatedOvulationDay == 14)  // 28 - 14
+        
+        // Shorter luteal (12 days) = earlier ovulation
+        let shortLutealCycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 12)
+        #expect(shortLutealCycle.estimatedOvulationDay == 16)  // 28 - 12
+        
+        // Longer luteal (16 days) = later ovulation
+        let longLutealCycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 16)
+        #expect(longLutealCycle.estimatedOvulationDay == 12)  // 28 - 16
+    }
+    
+    @Test("Fertile window adjusts with luteal length")
+    func fertileWindowAdjustsWithLuteal() {
+        // 12-day luteal phase
+        let cycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 12)
+        
+        // Ovulation: day 16 (28 - 12)
+        // Fertile window: 11-17
+        #expect(cycle.estimatedOvulationDay == 16)
+        #expect(cycle.fertileWindowStart == 11)  // 16 - 5
+        #expect(cycle.fertileWindowEnd == 17)    // 16 + 1
+    }
+    
+    @Test("Luteal length clamped to safe range")
+    func lutealClampedToSafeRange() {
+        // Even with extreme luteal values, fertile window stays sensible
+        var extremeShortCycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 5)
+        extremeShortCycle.generateDays()
+        
+        // fertileWindowStart should be at least 1
+        #expect(extremeShortCycle.fertileWindowStart >= 1)
+        
+        var extremeLongCycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 25)
+        extremeLongCycle.generateDays()
+        
+        // Should still have some fertile days
+        let fertileDays = extremeLongCycle.days.filter { $0.fertilityLevel == .high || $0.fertilityLevel == .peak }
+        #expect(fertileDays.count >= 1)
+    }
+    
+    @Test("Generated days use correct fertility levels with custom luteal")
+    func generatedDaysUseCustomLuteal() {
+        var cycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28, lutealLength: 12)
+        cycle.generateDays()
+        
+        // With 12-day luteal, ovulation is day 16
+        // Peak days: 15, 16 (ovulation day and day before)
+        let peakDays = cycle.days.enumerated().filter { $0.element.fertilityLevel == .peak }
+        let peakDayNumbers = peakDays.map { $0.offset + 1 }
+        
+        #expect(peakDayNumbers.contains(15), "Day 15 should be peak")
+        #expect(peakDayNumbers.contains(16), "Day 16 should be peak")
+    }
+    
+    @Test("User starts with default luteal values")
+    func userDefaultLutealValues() {
+        let user = User(name: "Test", role: .woman)
+        
+        #expect(user.averageLutealLength == 14)
+        #expect(user.lutealSamples == 0)
+    }
+    
+    @Test("Recalibration requires LH positive data")
+    func recalibrationRequiresLHData() {
+        let service = DataService.shared
+        service.resetAllData()
+        
+        var user = service.createUser(name: "Test", role: .woman)
+        let initialLuteal = user.averageLutealLength
+        
+        // Create a cycle without LH data
+        var cycleWithoutLH = Cycle(userId: user.id, startDate: Date().addingTimeInterval(-28*24*60*60), cycleLength: 28)
+        cycleWithoutLH.generateDays()
+        
+        // Simulate recalibration
+        service.recalibrateLutealPhase(previousCycle: cycleWithoutLH, newCycleStartDate: Date())
+        
+        // Should not change without LH data
+        user = service.currentUser!
+        #expect(user.averageLutealLength == initialLuteal)
+        #expect(user.lutealSamples == 0)
+    }
+    
+    @Test("Recalibration uses first LH positive only")
+    func recalibrationUsesFirstLH() {
+        let service = DataService.shared
+        service.resetAllData()
+        
+        _ = service.createUser(name: "Test", role: .woman)
+        
+        let calendar = Calendar.current
+        let cycleStart = calendar.date(byAdding: .day, value: -28, to: Date())!
+        
+        // Create cycle with multiple LH positives
+        var cycle = Cycle(userId: UUID(), startDate: cycleStart, cycleLength: 28)
+        cycle.generateDays()
+        
+        // Add LH positive on day 14 (index 13)
+        cycle.days[13].lhTestResult = .positive
+        cycle.days[13].lhTestLoggedAt = calendar.date(byAdding: .day, value: 13, to: cycleStart)
+        
+        // Add another LH positive on day 15 (index 14) - should be ignored
+        cycle.days[14].lhTestResult = .positive
+        cycle.days[14].lhTestLoggedAt = calendar.date(byAdding: .day, value: 14, to: cycleStart)
+        
+        // Run recalibration
+        service.recalibrateLutealPhase(previousCycle: cycle, newCycleStartDate: Date())
+        
+        // Should have learned something (first LH on day 14, ~14 days to next cycle)
+        let user = service.currentUser!
+        #expect(user.lutealSamples == 1, "Should have 1 sample after first learning")
+    }
+    
+    @Test("Recalibration skips irregular cycles")
+    func recalibrationSkipsIrregularCycles() {
+        let service = DataService.shared
+        service.resetAllData()
+        
+        _ = service.createUser(name: "Test", role: .woman)
+        
+        let calendar = Calendar.current
+        
+        // Very short cycle (15 days) - should be skipped
+        let shortCycleStart = calendar.date(byAdding: .day, value: -15, to: Date())!
+        var shortCycle = Cycle(userId: UUID(), startDate: shortCycleStart, cycleLength: 15)
+        shortCycle.generateDays()
+        shortCycle.days[7].lhTestResult = .positive
+        
+        service.recalibrateLutealPhase(previousCycle: shortCycle, newCycleStartDate: Date())
+        
+        var user = service.currentUser!
+        #expect(user.lutealSamples == 0, "Should not learn from irregular cycle")
+        
+        // Very long cycle (45 days) - should be skipped
+        service.resetAllData()
+        _ = service.createUser(name: "Test", role: .woman)
+        
+        let longCycleStart = calendar.date(byAdding: .day, value: -45, to: Date())!
+        var longCycle = Cycle(userId: UUID(), startDate: longCycleStart, cycleLength: 45)
+        longCycle.generateDays()
+        longCycle.days[20].lhTestResult = .positive
+        
+        service.recalibrateLutealPhase(previousCycle: longCycle, newCycleStartDate: Date())
+        
+        user = service.currentUser!
+        #expect(user.lutealSamples == 0, "Should not learn from irregular cycle")
+    }
+}

@@ -92,12 +92,18 @@ final class NetworkService {
     }
     
     private func isNonRetryableError(_ error: Error) -> Bool {
+        // Don't retry cancellation errors (user navigated away)
+        if error is CancellationError {
+            return true
+        }
+        
         // Don't retry authentication errors or validation errors
         let errorString = error.localizedDescription.lowercased()
         return errorString.contains("unauthorized") ||
                errorString.contains("invalid") ||
                errorString.contains("not found") ||
-               errorString.contains("forbidden")
+               errorString.contains("forbidden") ||
+               errorString.contains("cancel")
     }
     
     // MARK: - Offline Queue

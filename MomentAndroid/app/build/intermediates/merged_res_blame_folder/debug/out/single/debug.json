@@ -1,0 +1,22 @@
+[
+    {
+        "merged": "com.moment.app-merged_res-5:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.moment.app-main-7:/drawable/ic_launcher_foreground.xml"
+    },
+    {
+        "merged": "com.moment.app-merged_res-5:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.moment.app-main-7:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "/private/var/folders/p7/ncp3tbbj11s0gjr4mvtx82yr0000gn/T/cursor-sandbox-cache/9941231ea3e50141a8b17c0302f4b419/gradle/daemon/8.5/com.moment.app-merged_res-5:/drawable_ic_google.xml.flat",
+        "source": "/private/var/folders/p7/ncp3tbbj11s0gjr4mvtx82yr0000gn/T/cursor-sandbox-cache/9941231ea3e50141a8b17c0302f4b419/gradle/daemon/8.5/com.moment.app-main-7:/drawable/ic_google.xml"
+    },
+    {
+        "merged": "com.moment.app-merged_res-5:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.moment.app-main-7:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.moment.app-merged_res-5:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.moment.app-main-7:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    }
+]

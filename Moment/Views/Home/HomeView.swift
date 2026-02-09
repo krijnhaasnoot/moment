@@ -55,6 +55,56 @@ struct HomeView: View {
     }
 }
 
+// MARK: - Toast View
+
+struct ToastView: View {
+    let message: String
+    @Binding var isPresented: Bool
+    
+    var body: some View {
+        if isPresented {
+            VStack {
+                Spacer()
+                
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.momentGreen)
+                    
+                    Text(message)
+                        .font(.momentCaptionMedium)
+                        .foregroundColor(.momentCharcoal)
+                }
+                .padding(.horizontal, Spacing.lg)
+                .padding(.vertical, Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: CornerRadius.large)
+                        .fill(Color.momentCardBackground)
+                        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+                )
+                .padding(.horizontal, Spacing.xl)
+                .padding(.bottom, Spacing.xl)
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onAppear {
+                // Auto-dismiss after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        isPresented = false
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Helper to format date for toast messages
+private func formatDateForToast(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "EEE, MMM d"
+    return formatter.string(from: date)
+}
+
 // MARK: - Offline Banner
 
 struct OfflineBanner: View {
@@ -123,6 +173,11 @@ struct TabSelector: View {
 
 struct HomeHeader: View {
     @Bindable var viewModel: AppViewModel
+    @State private var partnerProfile: Profile?
+    
+    var isConnected: Bool {
+        viewModel.localCouple?.isLinked ?? false
+    }
     
     var body: some View {
         HStack {
@@ -138,16 +193,89 @@ struct HomeHeader: View {
             
             Spacer()
             
-            Button {
-                viewModel.showingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 22))
-                    .foregroundColor(.momentWarmGray)
+            HStack(spacing: Spacing.sm) {
+                // Partner photo (when connected)
+                if isConnected {
+                    partnerPhotoView
+                        .transition(.scale.combined(with: .opacity))
+                }
+                
+                Button {
+                    viewModel.showingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 22))
+                        .foregroundColor(.momentWarmGray)
+                }
             }
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.top, Spacing.md)
+        .task {
+            if isConnected {
+                await fetchPartnerProfile()
+            }
+        }
+    }
+    
+    @ViewBuilder
+    var partnerPhotoView: some View {
+        if let photoUrl = partnerProfile?.profilePhotoUrl,
+           let url = URL(string: photoUrl) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.momentGreen, lineWidth: 1.5)
+                        )
+                case .failure(_), .empty:
+                    partnerInitialsView
+                @unknown default:
+                    partnerInitialsView
+                }
+            }
+        } else {
+            partnerInitialsView
+        }
+    }
+    
+    @ViewBuilder
+    var partnerInitialsView: some View {
+        Circle()
+            .fill(Color.momentGreen.opacity(0.2))
+            .frame(width: 32, height: 32)
+            .overlay(
+                Text(partnerInitials)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.momentGreen)
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.momentGreen, lineWidth: 1.5)
+            )
+    }
+    
+    var partnerInitials: String {
+        guard let name = partnerProfile?.name else { return "?" }
+        let components = name.split(separator: " ")
+        if let first = components.first?.first {
+            return String(first).uppercased()
+        }
+        return "?"
+    }
+    
+    func fetchPartnerProfile() async {
+        do {
+            partnerProfile = try await SupabaseService.shared.getPartnerProfile()
+        } catch {
+            print("❌ Error fetching partner profile: \(error)")
+        }
     }
     
     var greeting: String {
@@ -189,46 +317,78 @@ struct HomeHeader: View {
 struct TodayView: View {
     @Bindable var viewModel: AppViewModel
     @State private var refreshTrigger = UUID()
+    @State private var showToast = false
+    @State private var toastMessage = ""
     
     var isPartner: Bool {
         viewModel.currentUser?.role == .partner
     }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: Spacing.lg) {
-                // Action Card
-                ActionCardView(viewModel: viewModel, refreshTrigger: refreshTrigger)
-                    .padding(.horizontal, Spacing.lg)
-                    .padding(.top, Spacing.lg)
-                
-                // Fertility Forecast (both roles)
-                FertilityForecastView(viewModel: viewModel, refreshTrigger: refreshTrigger)
-                    .padding(.horizontal, Spacing.lg)
-                
-                // Quick actions
-                if viewModel.currentUser?.role == .woman {
-                    QuickActionsView(viewModel: viewModel)
+        ZStack {
+            ScrollView {
+                VStack(spacing: Spacing.lg) {
+                    // Action Card
+                    ActionCardView(viewModel: viewModel, refreshTrigger: refreshTrigger)
                         .padding(.horizontal, Spacing.lg)
-                } else {
-                    // Partner quick actions (just intimacy logging)
-                    PartnerQuickActionsView(viewModel: viewModel)
+                        .padding(.top, Spacing.lg)
+                    
+                    // Fertility Forecast (both roles)
+                    FertilityForecastView(viewModel: viewModel, refreshTrigger: refreshTrigger)
                         .padding(.horizontal, Spacing.lg)
+                    
+                    // Pregnancy test timing (woman only, after ovulation)
+                    if viewModel.currentUser?.role == .woman {
+                        PregnancyTestInfoView(viewModel: viewModel)
+                            .padding(.horizontal, Spacing.lg)
+                    }
+                    
+                    // Quick actions
+                    if viewModel.currentUser?.role == .woman {
+                        QuickActionsView(viewModel: viewModel, onIntimacyLogged: { date, logged in
+                            showIntimacyToast(for: date, logged: logged)
+                        })
+                            .padding(.horizontal, Spacing.lg)
+                        
+                        // Temperature logging (optional, only shown if enabled)
+                        if viewModel.isTemperatureTrackingEnabled {
+                            TemperatureLoggingView(viewModel: viewModel)
+                                .padding(.horizontal, Spacing.lg)
+                        }
+                    } else {
+                        // Partner quick actions (just intimacy logging)
+                        PartnerQuickActionsView(viewModel: viewModel, onIntimacyLogged: { date, logged in
+                            showIntimacyToast(for: date, logged: logged)
+                        })
+                            .padding(.horizontal, Spacing.lg)
+                    }
+                    
+                    Spacer(minLength: Spacing.xxl)
                 }
-                
-                Spacer(minLength: Spacing.xxl)
             }
+            .refreshable {
+                if isPartner {
+                    // Trigger refresh of child views
+                    refreshTrigger = UUID()
+                    // Small delay to allow views to react
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                } else {
+                    // Woman: refresh cycle data from Supabase
+                    await viewModel.refreshCycleData()
+                }
+            }
+            
+            // Toast overlay
+            ToastView(message: toastMessage, isPresented: $showToast)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: showToast)
         }
-        .refreshable {
-            if isPartner {
-                // Trigger refresh of child views
-                refreshTrigger = UUID()
-                // Small delay to allow views to react
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            } else {
-                // Woman: refresh cycle data from Supabase
-                await viewModel.refreshCycleData()
-            }
+    }
+    
+    private func showIntimacyToast(for date: Date, logged: Bool) {
+        let dateString = formatDateForToast(date)
+        toastMessage = logged ? "Intimacy logged for \(dateString)" : "Intimacy removed for \(dateString)"
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showToast = true
         }
     }
 }
@@ -630,10 +790,142 @@ struct FertilityForecastView: View {
     }
 }
 
+// MARK: - Pregnancy Test Timing
+
+struct PregnancyTestInfoView: View {
+    @Bindable var viewModel: AppViewModel
+    
+    /// Calculate the days past ovulation (DPO)
+    var daysPastOvulation: Int? {
+        guard let cycle = viewModel.currentCycle else { return nil }
+        
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let cycleStart = calendar.startOfDay(for: cycle.startDate)
+        
+        guard let daysSinceStart = calendar.dateComponents([.day], from: cycleStart, to: today).day else { return nil }
+        let currentDay = daysSinceStart + 1
+        
+        // Ovulation day in the cycle
+        let ovulationDay = cycle.estimatedOvulationDay
+        
+        // DPO = current day - ovulation day (negative = before ovulation)
+        let dpo = currentDay - ovulationDay
+        return dpo
+    }
+    
+    /// Date when you can take a pregnancy test (8 DPO = earliest reliable)
+    var testDate: Date? {
+        guard let cycle = viewModel.currentCycle else { return nil }
+        
+        let calendar = Calendar.current
+        let cycleStart = calendar.startOfDay(for: cycle.startDate)
+        
+        // Test date = cycle start + ovulation day + 8 days
+        let testDayNumber = cycle.estimatedOvulationDay + 8
+        return calendar.date(byAdding: .day, value: testDayNumber - 1, to: cycleStart)
+    }
+    
+    /// Days until test date
+    var daysUntilTest: Int? {
+        guard let testDate = testDate else { return nil }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return calendar.dateComponents([.day], from: today, to: testDate).day
+    }
+    
+    /// Should we show this view?
+    var shouldShow: Bool {
+        guard let dpo = daysPastOvulation else { return false }
+        // Show from 1 DPO until next period (approximately)
+        // Don't show before ovulation (dpo < 0) or very early in cycle
+        return dpo >= 1
+    }
+    
+    var body: some View {
+        if shouldShow {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack {
+                    Image(systemName: "testtube.2")
+                        .font(.system(size: 16))
+                        .foregroundColor(.momentRose)
+                    
+                    Text("Zwangerschapstest")
+                        .font(.momentSubheadline)
+                        .foregroundColor(.momentCharcoal)
+                    
+                    Spacer()
+                }
+                
+                if let dpo = daysPastOvulation, let daysUntil = daysUntilTest {
+                    if daysUntil <= 0 {
+                        // Can test now!
+                        HStack(spacing: Spacing.xs) {
+                            Circle()
+                                .fill(Color.momentGreen)
+                                .frame(width: 8, height: 8)
+                            
+                            Text("Je kunt nu testen!")
+                                .font(.momentCaptionMedium)
+                                .foregroundColor(.momentGreen)
+                            
+                            Text("(\(dpo) DPO)")
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                        
+                        Text("8+ dagen na ovulatie — hCG is nu detecteerbaar")
+                            .font(.momentCaption)
+                            .foregroundColor(.momentSecondaryText)
+                    } else {
+                        // Waiting phase
+                        HStack(spacing: Spacing.xs) {
+                            Circle()
+                                .fill(Color.momentWarmGray)
+                                .frame(width: 8, height: 8)
+                            
+                            Text("Nog \(daysUntil) \(daysUntil == 1 ? "dag" : "dagen") wachten")
+                                .font(.momentCaptionMedium)
+                                .foregroundColor(.momentCharcoal)
+                            
+                            Text("(\(dpo) DPO)")
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                        
+                        if let date = testDate {
+                            Text("Test vanaf \(formatTestDate(date))")
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                    }
+                }
+            }
+            .padding(Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .fill(Color.momentCardBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(Color.momentSand, lineWidth: 1)
+            )
+        }
+    }
+    
+    func formatTestDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "nl_NL")
+        formatter.dateFormat = "EEEE d MMMM"
+        return formatter.string(from: date)
+    }
+}
+
 // MARK: - Quick Actions
 
 struct QuickActionsView: View {
     @Bindable var viewModel: AppViewModel
+    var onIntimacyLogged: ((Date, Bool) -> Void)?
     @State private var showingNotifyConfirmation = false
     @State private var isSendingNotification = false
     @State private var notificationSent = false
@@ -672,7 +964,10 @@ struct QuickActionsView: View {
                     title: hasLoggedIntimacyToday ? "Logged" : "Log ❤️",
                     color: .momentRose
                 ) {
+                    let wasLogged = hasLoggedIntimacyToday
                     viewModel.toggleIntimacy(for: Date())
+                    // Show toast with the new state (opposite of what it was)
+                    onIntimacyLogged?(Date(), !wasLogged)
                 }
                 
                 if viewModel.isInFertileWindow {
@@ -742,6 +1037,7 @@ struct QuickActionsView: View {
 
 struct PartnerQuickActionsView: View {
     @Bindable var viewModel: AppViewModel
+    var onIntimacyLogged: ((Date, Bool) -> Void)?
     @State private var hasLoggedIntimacyToday = false
     @State private var isLoading = false
     
@@ -788,15 +1084,18 @@ struct PartnerQuickActionsView: View {
     
     func logIntimacy() {
         isLoading = true
+        let wasLogged = hasLoggedIntimacyToday
         
         Task {
             do {
                 // Toggle: if already logged, remove it; otherwise add it
-                let newValue = !hasLoggedIntimacyToday
+                let newValue = !wasLogged
                 try await SupabaseService.shared.logIntimacy(date: Date(), hadIntimacy: newValue)
                 await MainActor.run {
                     hasLoggedIntimacyToday = newValue
                     isLoading = false
+                    // Show toast with the new state
+                    onIntimacyLogged?(Date(), newValue)
                 }
             } catch {
                 print("Error logging intimacy: \(error)")
@@ -919,60 +1218,131 @@ struct LogPeriodSheet: View {
 struct LogLHSheet: View {
     @Bindable var viewModel: AppViewModel
     @State private var selectedResult: LHTestResult?
+    @State private var showingInfo = false
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: Spacing.lg) {
-                VStack(spacing: Spacing.sm) {
-                    Text("Log your LH test")
-                        .font(.momentHeadline)
-                        .foregroundColor(.momentCharcoal)
-                    
-                    Text("What was your result today?")
-                        .font(.momentBody)
-                        .foregroundColor(.momentSecondaryText)
-                }
-                .padding(.top, Spacing.xl)
-                
-                VStack(spacing: Spacing.md) {
-                    LHResultButton(
-                        result: .negative,
-                        isSelected: selectedResult == .negative,
-                        action: { selectedResult = .negative }
-                    )
-                    
-                    LHResultButton(
-                        result: .positive,
-                        isSelected: selectedResult == .positive,
-                        action: { selectedResult = .positive }
-                    )
-                }
-                .padding(.horizontal, Spacing.lg)
-                .padding(.top, Spacing.lg)
-                
-                Spacer()
-                
-                if selectedResult == .positive {
-                    HStack(spacing: Spacing.sm) {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(.momentGreen)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: Spacing.md) {
+                        // Header
+                        VStack(spacing: Spacing.xs) {
+                            Text("Log LH Test")
+                                .font(.momentHeadline)
+                                .foregroundColor(.momentCharcoal)
+                            
+                            HStack(spacing: Spacing.xs) {
+                                Text("What was your result today?")
+                                    .font(.momentBody)
+                                    .foregroundColor(.momentSecondaryText)
+                                
+                                // "What is this?" inline link
+                                Button {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showingInfo.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: "questionmark.circle")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.momentTeal)
+                                }
+                            }
+                        }
+                        .padding(.top, Spacing.md)
                         
-                        Text("A positive result means ovulation is likely within 24-36 hours")
-                            .font(.momentCaption)
-                            .foregroundColor(.momentSecondaryText)
+                        // Expandable info section - shown when tapped
+                        if showingInfo {
+                            VStack(alignment: .leading, spacing: Spacing.sm) {
+                                HStack {
+                                    Text("About LH tests")
+                                        .font(.momentSubheadline)
+                                        .foregroundColor(.momentCharcoal)
+                                    
+                                    Spacer()
+                                    
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            showingInfo = false
+                                        }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundColor(.momentWarmGray)
+                                    }
+                                }
+                                
+                                Text("LH tests detect a short hormone surge that often happens shortly before ovulation.")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentSecondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                
+                                Text("Logging results is optional. If you choose to log them, Moment can use the signal to refine timing insights over time.")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentSecondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                
+                                Text("Moment is not a medical device and does not provide medical advice.")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentWarmGray)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(Spacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.momentTeal.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+                            .padding(.horizontal, Spacing.lg)
+                            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        }
+                        
+                        // Result buttons
+                        VStack(spacing: Spacing.sm) {
+                            LHResultButton(
+                                result: .negative,
+                                isSelected: selectedResult == .negative,
+                                action: { selectedResult = .negative }
+                            )
+                            
+                            LHResultButton(
+                                result: .positive,
+                                isSelected: selectedResult == .positive,
+                                action: { selectedResult = .positive }
+                            )
+                        }
+                        .padding(.horizontal, Spacing.lg)
+                        
+                        // Positive result info hint
+                        if selectedResult == .positive {
+                            HStack(spacing: Spacing.sm) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.momentGreen)
+                                
+                                Text("A positive result means ovulation is likely within 24-36 hours")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentSecondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.horizontal, Spacing.lg)
+                        }
+                        
+                        Spacer(minLength: Spacing.xl)
                     }
-                    .padding(.horizontal, Spacing.lg)
                 }
+                .scrollBounceBehavior(.basedOnSize)
                 
-                Button("Log Result") {
-                    if let result = selectedResult {
-                        viewModel.logLHTest(result: result)
+                // Log button pinned to bottom
+                VStack(spacing: 0) {
+                    Divider()
+                    Button("Log Result") {
+                        if let result = selectedResult {
+                            viewModel.logLHTest(result: result)
+                        }
                     }
+                    .buttonStyle(MomentPrimaryButtonStyle(isEnabled: selectedResult != nil))
+                    .disabled(selectedResult == nil)
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.vertical, Spacing.md)
                 }
-                .buttonStyle(MomentPrimaryButtonStyle(isEnabled: selectedResult != nil))
-                .disabled(selectedResult == nil)
-                .padding(.horizontal, Spacing.lg)
-                .padding(.bottom, Spacing.lg)
+                .background(Color.momentBackground)
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -985,7 +1355,8 @@ struct LogLHSheet: View {
             }
             .momentBackground()
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -1032,6 +1403,185 @@ struct LHResultButton: View {
             )
             .momentShadowSubtle()
         }
+    }
+}
+
+// MARK: - Temperature Logging View
+// Note: Temperature tracking is optional and user-initiated.
+// It is OFF by default and never sends notifications or reminders.
+// Temperature data is stored but NOT currently used for fertility predictions.
+// Future versions may use temperature as a secondary confirmation signal.
+
+struct TemperatureLoggingView: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var temperatureInput: String = ""
+    @State private var hasLoggedToday: Bool = false
+    @State private var todaysTemperature: Double?
+    @State private var isEditing: Bool = false
+    @FocusState private var isInputFocused: Bool
+    
+    var temperatureUnit: TemperatureUnit {
+        viewModel.temperatureUnit
+    }
+    
+    var placeholder: String {
+        temperatureUnit == .celsius ? "36.5" : "97.7"
+    }
+    
+    var body: some View {
+        MomentCard {
+            HStack(spacing: Spacing.md) {
+                // Icon
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 20))
+                    .foregroundColor(.momentTeal)
+                    .frame(width: 28)
+                
+                // Content
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text("Temperature")
+                        .font(.momentSubheadline)
+                        .foregroundColor(.momentCharcoal)
+                    
+                    Text("optional")
+                        .font(.momentCaption)
+                        .foregroundColor(.momentSecondaryText)
+                }
+                
+                Spacer()
+                
+                // Right side: either logged value or input
+                if hasLoggedToday && !isEditing, let temp = todaysTemperature {
+                    // Logged state - show value with edit/clear options
+                    HStack(spacing: Spacing.xs) {
+                        Text(temperatureUnit.format(temp))
+                            .font(.momentBodyMedium)
+                            .foregroundColor(.momentGreen)
+                            .fixedSize(horizontal: true, vertical: false)
+                        
+                        Button {
+                            isEditing = true
+                            isInputFocused = true
+                        } label: {
+                            Image(systemName: "pencil.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.momentTeal.opacity(0.7))
+                        }
+                        
+                        Button {
+                            clearTemperature()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.momentWarmGray.opacity(0.6))
+                        }
+                    }
+                } else {
+                    // Input state
+                    HStack(spacing: Spacing.sm) {
+                        HStack(spacing: Spacing.xxs) {
+                            TextField(placeholder, text: $temperatureInput)
+                                .keyboardType(.decimalPad)
+                                .font(.momentBody)
+                                .foregroundColor(.momentCharcoal)
+                                .focused($isInputFocused)
+                                .frame(width: 50)
+                                .multilineTextAlignment(.center)
+                            
+                            Text(temperatureUnit.displayName)
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                        .background(
+                            RoundedRectangle(cornerRadius: CornerRadius.small)
+                                .fill(Color.momentMist.opacity(0.5))
+                        )
+                        
+                        Button {
+                            logTemperature()
+                        } label: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(isValidInput ? .momentTeal : .momentMist)
+                        }
+                        .disabled(!isValidInput)
+                        
+                        // Cancel button when editing existing value
+                        if isEditing {
+                            Button {
+                                isEditing = false
+                                isInputFocused = false
+                                // Reset to original value
+                                if let temp = todaysTemperature {
+                                    let displayValue = temperatureUnit.displayValue(from: temp)
+                                    temperatureInput = String(format: "%.1f", displayValue)
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundColor(.momentWarmGray.opacity(0.6))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            loadTodaysTemperature()
+        }
+        .onTapGesture {
+            isInputFocused = false
+        }
+    }
+    
+    var isValidInput: Bool {
+        guard let value = Double(temperatureInput.replacingOccurrences(of: ",", with: ".")) else {
+            return false
+        }
+        // Valid BBT range: 35-42°C or 95-108°F
+        if temperatureUnit == .celsius {
+            return value >= 35.0 && value <= 42.0
+        } else {
+            return value >= 95.0 && value <= 108.0
+        }
+    }
+    
+    private func loadTodaysTemperature() {
+        if let temp = viewModel.todaysCycleDay?.temperature {
+            todaysTemperature = temp
+            hasLoggedToday = true
+            isEditing = false
+            // Show in user's preferred unit
+            let displayValue = temperatureUnit.displayValue(from: temp)
+            temperatureInput = String(format: "%.1f", displayValue)
+        } else {
+            hasLoggedToday = false
+            todaysTemperature = nil
+            temperatureInput = ""
+        }
+    }
+    
+    private func logTemperature() {
+        guard let value = Double(temperatureInput.replacingOccurrences(of: ",", with: ".")) else { return }
+        
+        // Convert to Celsius for storage
+        let celsius = temperatureUnit.toCelsius(from: value)
+        
+        viewModel.logTemperature(celsius)
+        hasLoggedToday = true
+        todaysTemperature = celsius
+        isEditing = false
+        isInputFocused = false
+    }
+    
+    private func clearTemperature() {
+        DataService.shared.removeTemperature(for: Date())
+        hasLoggedToday = false
+        todaysTemperature = nil
+        temperatureInput = ""
+        isEditing = false
     }
 }
 

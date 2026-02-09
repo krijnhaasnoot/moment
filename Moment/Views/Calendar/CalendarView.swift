@@ -30,6 +30,9 @@ struct CalendarView: View {
     @State private var isLoadingPartnerCycle = false
     @State private var selectedDate: Date?
     @State private var showingDayOptions = false
+    @State private var refreshTrigger = UUID()  // Forces view refresh after intimacy changes
+    @State private var showToast = false
+    @State private var toastMessage = ""
     
     private let calendar = Calendar.current
     private let columns = Array(repeating: GridItem(.flexible()), count: 7)
@@ -40,12 +43,18 @@ struct CalendarView: View {
     
     var canLogIntimacy: Bool {
         guard let date = selectedDate else { return false }
-        // Can only log for today or past days
-        return calendar.startOfDay(for: date) <= calendar.startOfDay(for: Date())
+        guard viewModel.currentCycle != nil else { return false }
+        
+        let checkDate = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
+        
+        // Can log for any day up to today (including days before cycle start)
+        return checkDate <= today
     }
     
     var body: some View {
-        ScrollView {
+        ZStack {
+            ScrollView {
             VStack(spacing: Spacing.lg) {
                 // Month navigation
                 MonthNavigator(displayedMonth: $displayedMonth)
@@ -70,7 +79,7 @@ struct CalendarView: View {
                             .frame(height: 200)
                     } else {
                         LazyVGrid(columns: columns, spacing: Spacing.sm) {
-                            ForEach(daysInMonth, id: \.self) { date in
+                            ForEach(Array(daysInMonth.enumerated()), id: \.offset) { index, date in
                                 if let date = date {
                                     CalendarDayCell(
                                         date: date,
@@ -89,6 +98,7 @@ struct CalendarView: View {
                                 }
                             }
                         }
+                        .id(refreshTrigger)  // Force re-render when intimacy changes
                     }
                 }
                 .padding(Spacing.md)
@@ -137,6 +147,14 @@ struct CalendarView: View {
                 await loadPartnerCycle()
             }
         }
+        .onAppear {
+            // Reload partner cycle when tab becomes visible
+            if isPartner && partnerCycleDays.isEmpty && !isLoadingPartnerCycle {
+                Task {
+                    await loadPartnerCycle()
+                }
+            }
+        }
         .refreshable {
             if isPartner {
                 await loadPartnerCycle()
@@ -156,17 +174,21 @@ struct CalendarView: View {
                     Button("Remove Intimacy Log", role: .destructive) {
                         if let date = selectedDate {
                             viewModel.logIntimacy(for: date, remove: true)
+                            refreshTrigger = UUID()
+                            showIntimacyToast(for: date, logged: false)
+                            if isPartner {
+                                Task { await loadPartnerCycle() }
+                            }
                         }
                     }
                 } else {
                     Button("Log Intimacy ❤️") {
                         if let date = selectedDate {
                             viewModel.logIntimacy(for: date)
-                            // Refresh partner data after logging
+                            refreshTrigger = UUID()
+                            showIntimacyToast(for: date, logged: true)
                             if isPartner {
-                                Task {
-                                    await loadPartnerCycle()
-                                }
+                                Task { await loadPartnerCycle() }
                             }
                         }
                     }
@@ -175,14 +197,21 @@ struct CalendarView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if let date = selectedDate {
-                if isPartner {
-                    let partnerDay = partnerCycleDayFor(date: date)
-                    Text("Fertility: \(partnerDay?.fertilityLevel.displayName ?? "Unknown")")
+                let cycleDay = isPartner ? nil : cycleDayFor(date: date)
+                let partnerDay = isPartner ? partnerCycleDayFor(date: date) : nil
+                let level = isPartner ? partnerDay?.fertilityLevel : cycleDay?.fertilityLevel
+                
+                if let fertilityLevel = level {
+                    Text("Fertility: \(fertilityLevel.displayName)")
                 } else {
-                    let cycleDay = cycleDayFor(date: date)
-                    Text("Fertility: \(cycleDay?.fertilityLevel.displayName ?? "Unknown")")
+                    Text("Log intimacy for this day")
                 }
             }
+        }
+            
+            // Toast overlay
+            ToastView(message: toastMessage, isPresented: $showToast)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: showToast)
         }
     }
     
@@ -191,6 +220,16 @@ struct CalendarView: View {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         return formatter.string(from: date)
+    }
+    
+    private func showIntimacyToast(for date: Date, logged: Bool) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE, MMM d"
+        let dateString = formatter.string(from: date)
+        toastMessage = logged ? "Intimacy logged for \(dateString)" : "Intimacy removed for \(dateString)"
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showToast = true
+        }
     }
     
     var weekdaySymbols: [String] {
@@ -235,90 +274,154 @@ struct CalendarView: View {
     func cycleDayFor(date: Date) -> CycleDay? {
         guard !isPartner, let cycle = viewModel.currentCycle else { return nil }
         
-        // First try exact match from stored days
-        if let day = cycle.days.first(where: { calendar.isDate($0.date, inSameDayAs: date) }) {
-            return day
-        }
-        
-        // Calculate based on cycle position for dates within cycle range
+        // Normalize dates for comparison
         let startOfCycle = calendar.startOfDay(for: cycle.startDate)
         let checkDate = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
         
         guard let daysSinceStart = calendar.dateComponents([.day], from: startOfCycle, to: checkDate).day else {
             return nil
         }
         
-        // Only show for dates within this cycle (0 to cycleLength-1)
-        guard daysSinceStart >= 0 && daysSinceStart < cycle.cycleLength else {
-            return nil
-        }
+        // Days before cycle start - return nil (white day, but can still log intimacy)
+        guard daysSinceStart >= 0 else { return nil }
         
-        // If we have stored days, use them by index
+        // For days within the stored array, use stored data (preserves intimacy)
         if daysSinceStart < cycle.days.count {
             return cycle.days[daysSinceStart]
         }
         
-        // Otherwise calculate fertility level
-        let dayNumber = daysSinceStart + 1
-        let isMenstruation = dayNumber <= 5
+        // For days within expected cycle length but beyond stored array, calculate fertility
+        if daysSinceStart < cycle.cycleLength {
+            let dayNumber = daysSinceStart + 1
+            let isMenstruation = dayNumber <= 5
+            
+            var fertilityLevel: FertilityLevel = .low
+            if dayNumber >= cycle.fertileWindowStart && dayNumber <= cycle.fertileWindowEnd {
+                if dayNumber == cycle.estimatedOvulationDay || dayNumber == cycle.estimatedOvulationDay - 1 {
+                    fertilityLevel = .peak
+                } else {
+                    fertilityLevel = .high
+                }
+            }
+            
+            return CycleDay(date: checkDate, fertilityLevel: fertilityLevel, isMenstruation: isMenstruation)
+        }
         
+        // For days beyond current cycle but in the past/today - show as extended cycle (low fertility)
+        if checkDate <= today {
+            return CycleDay(date: checkDate, fertilityLevel: .low, isMenstruation: false)
+        }
+        
+        // FUTURE PROJECTION: Calculate day within projected cycle
+        // This helps couples plan ahead by showing expected fertility windows
+        let cycleLength = cycle.cycleLength
+        let dayInProjectedCycle = (daysSinceStart % cycleLength) + 1  // Day number within projected cycle (1-indexed)
+        
+        // Calculate fertility for projected cycle
+        let isMenstruation = dayInProjectedCycle <= 5
         var fertilityLevel: FertilityLevel = .low
-        if dayNumber >= cycle.fertileWindowStart && dayNumber <= cycle.fertileWindowEnd {
-            if dayNumber == cycle.estimatedOvulationDay || dayNumber == cycle.estimatedOvulationDay - 1 {
+        
+        if dayInProjectedCycle >= cycle.fertileWindowStart && dayInProjectedCycle <= cycle.fertileWindowEnd {
+            if dayInProjectedCycle == cycle.estimatedOvulationDay || dayInProjectedCycle == cycle.estimatedOvulationDay - 1 {
                 fertilityLevel = .peak
             } else {
                 fertilityLevel = .high
             }
         }
         
-        return CycleDay(date: date, fertilityLevel: fertilityLevel, isMenstruation: isMenstruation)
+        return CycleDay(date: checkDate, fertilityLevel: fertilityLevel, isMenstruation: isMenstruation)
     }
     
     func partnerCycleDayFor(date: Date) -> PartnerCycleDay? {
         guard isPartner else { return nil }
         
-        // First try to find an exact match from stored days
-        if let day = partnerCycleDays.first(where: { calendar.isDate($0.date, inSameDayAs: date) }) {
+        let checkDate = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: Date())
+        
+        // First try to find an exact match from stored days (includes intimacy data)
+        if let day = partnerCycleDays.first(where: { calendar.isDate($0.date, inSameDayAs: checkDate) }) {
             return day
         }
         
-        // Calculate based on cycle position for dates within cycle range
+        // Calculate based on cycle position
         guard let cycleInfo = partnerCycleInfo else { return nil }
         
         let startOfCycle = calendar.startOfDay(for: cycleInfo.startDate)
-        let checkDate = calendar.startOfDay(for: date)
         
         guard let daysSinceStart = calendar.dateComponents([.day], from: startOfCycle, to: checkDate).day else {
             return nil
         }
         
-        // Only show for dates within this cycle (0 to cycleLength-1)
-        guard daysSinceStart >= 0 && daysSinceStart < cycleInfo.cycleLength else {
-            return nil
+        // Days before cycle start - no data
+        guard daysSinceStart >= 0 else { return nil }
+        
+        // Calculate cycle parameters
+        let cycleLength = cycleInfo.cycleLength
+        let safeLutealLength = max(8, min(cycleInfo.lutealLength, 18))
+        let ovulationDay = max(1, cycleLength - safeLutealLength)
+        let fertileStart = max(1, ovulationDay - 5)
+        let fertileEnd = min(cycleLength, ovulationDay + 1)
+        
+        // For past/today within current cycle
+        if checkDate <= today && daysSinceStart < cycleLength {
+            let dayNumber = daysSinceStart + 1
+            var fertilityLevel: FertilityLevel = .low
+            if dayNumber >= fertileStart && dayNumber <= fertileEnd {
+                if dayNumber == ovulationDay || dayNumber == ovulationDay - 1 {
+                    fertilityLevel = .peak
+                } else {
+                    fertilityLevel = .high
+                }
+            }
+            return PartnerCycleDay(date: checkDate, fertilityLevel: fertilityLevel, lhTestResult: nil, hadIntimacy: false)
         }
         
-        // Calculate fertility level based on cycle day
-        let dayNumber = daysSinceStart + 1
-        let ovulationDay = cycleInfo.cycleLength - 14
-        let fertileStart = ovulationDay - 5
-        let fertileEnd = ovulationDay + 1
+        // Extended cycle (beyond expected length, in past)
+        if checkDate <= today {
+            return PartnerCycleDay(date: checkDate, fertilityLevel: .low, lhTestResult: nil, hadIntimacy: false)
+        }
+        
+        // FUTURE PROJECTION: Calculate which projected cycle and day this would be
+        let dayInProjectedCycle = (daysSinceStart % cycleLength) + 1
         
         var fertilityLevel: FertilityLevel = .low
-        if dayNumber >= fertileStart && dayNumber <= fertileEnd {
-            if dayNumber == ovulationDay || dayNumber == ovulationDay - 1 {
+        if dayInProjectedCycle >= fertileStart && dayInProjectedCycle <= fertileEnd {
+            if dayInProjectedCycle == ovulationDay || dayInProjectedCycle == ovulationDay - 1 {
                 fertilityLevel = .peak
             } else {
                 fertilityLevel = .high
             }
         }
         
-        return PartnerCycleDay(date: date, fertilityLevel: fertilityLevel, lhTestResult: nil, hadIntimacy: false)
+        return PartnerCycleDay(date: checkDate, fertilityLevel: fertilityLevel, lhTestResult: nil, hadIntimacy: false)
     }
     
     func loadPartnerCycle() async {
-        isLoadingPartnerCycle = true
+        // Prevent concurrent loads
+        guard !isLoadingPartnerCycle else {
+            print("📅 CalendarView: Already loading, skipping...")
+            return
+        }
+        
+        await MainActor.run {
+            isLoadingPartnerCycle = true
+        }
+        print("📅 CalendarView: Loading partner cycle...")
+        
         do {
+            // Check for cancellation before making network call
+            try Task.checkCancellation()
+            
             if let cycle = try await SupabaseService.shared.getPartnerCycle() {
+                // Check for cancellation after network call
+                try Task.checkCancellation()
+                
+                print("📅 CalendarView: Got cycle with \(cycle.cycleDays?.count ?? 0) days")
+                print("   - cycle.id: \(cycle.id)")
+                print("   - cycle.coupleId: \(cycle.coupleId?.uuidString ?? "nil")")
+                print("   - cycle.startDate: \(cycle.startDate)")
+                
                 let days = cycle.cycleDays?.map { day in
                     PartnerCycleDay(
                         date: day.date,
@@ -328,20 +431,32 @@ struct CalendarView: View {
                     )
                 } ?? []
                 
+                print("📅 CalendarView: Mapped \(days.count) partner cycle days")
+                
+                // Get partner's (woman's) personalized luteal length for accurate calculations
+                let lutealLength = try await SupabaseService.shared.getPartnerLutealLearning()
+                
                 // Store cycle info for calculating future days
                 let cycleInfo = PartnerCycleInfo(
                     startDate: cycle.startDate,
-                    cycleLength: cycle.cycleLength
+                    cycleLength: cycle.cycleLength,
+                    lutealLength: lutealLength
                 )
                 
                 await MainActor.run {
                     partnerCycleDays = days
                     partnerCycleInfo = cycleInfo
+                    print("📅 CalendarView: Updated state - partnerCycleDays: \(days.count), cycleInfo: \(cycleInfo.startDate)")
                 }
+            } else {
+                print("📅 CalendarView: getPartnerCycle returned nil")
             }
+        } catch is CancellationError {
+            print("📅 CalendarView: Task was cancelled (user navigated away)")
         } catch {
-            print("Failed to load partner cycle: \(error)")
+            print("📅 CalendarView: Failed to load partner cycle: \(error)")
         }
+        
         await MainActor.run {
             isLoadingPartnerCycle = false
         }
@@ -352,6 +467,13 @@ struct CalendarView: View {
 struct PartnerCycleInfo {
     let startDate: Date
     let cycleLength: Int
+    let lutealLength: Int  // Personalized luteal phase for accurate ovulation estimate
+    
+    init(startDate: Date, cycleLength: Int, lutealLength: Int = 14) {
+        self.startDate = startDate
+        self.cycleLength = cycleLength
+        self.lutealLength = lutealLength
+    }
 }
 
 // Partner-safe cycle day (no menstruation data)

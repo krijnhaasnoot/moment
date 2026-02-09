@@ -43,6 +43,11 @@ struct User: Codable, Identifiable {
     var notificationsEnabled: Bool
     var createdAt: Date
     
+    // Cycle learning: personalized luteal phase based on LH test history
+    // These refine ovulation timing estimates over multiple cycles
+    var averageLutealLength: Int  // Days from LH surge to next period (default: 14)
+    var lutealSamples: Int        // Number of confirmed LH→period observations
+    
     init(id: UUID = UUID(), name: String, role: UserRole, coupleId: UUID? = nil) {
         self.id = id
         self.name = name
@@ -51,24 +56,60 @@ struct User: Codable, Identifiable {
         self.notificationTone = .discreet
         self.notificationsEnabled = true
         self.createdAt = Date()
+        self.averageLutealLength = 14  // Standard assumption until personalized
+        self.lutealSamples = 0
+    }
+    
+    // Custom decoding to handle migration from old data without new fields
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        role = try container.decode(UserRole.self, forKey: .role)
+        coupleId = try container.decodeIfPresent(UUID.self, forKey: .coupleId)
+        notificationTone = try container.decodeIfPresent(NotificationTone.self, forKey: .notificationTone) ?? .discreet
+        notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        // New fields with defaults for migration
+        averageLutealLength = try container.decodeIfPresent(Int.self, forKey: .averageLutealLength) ?? 14
+        lutealSamples = try container.decodeIfPresent(Int.self, forKey: .lutealSamples) ?? 0
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, name, role, coupleId, notificationTone, notificationsEnabled, createdAt, averageLutealLength, lutealSamples
     }
 }
 
 struct LocalCouple: Codable, Identifiable {
     let id: UUID
-    var womanId: UUID
+    var womanId: UUID?  // Optional: null when partner creates the couple
     var partnerId: UUID?
     var inviteCode: String
     var isLinked: Bool
     var createdAt: Date
     
-    init(id: UUID = UUID(), womanId: UUID) {
+    init(id: UUID = UUID(), womanId: UUID? = nil, partnerId: UUID? = nil) {
         self.id = id
         self.womanId = womanId
-        self.partnerId = nil
+        self.partnerId = partnerId
         self.inviteCode = LocalCouple.generateInviteCode()
         self.isLinked = false
         self.createdAt = Date()
+    }
+    
+    // Custom decoding to handle migration and womanId becoming optional
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        womanId = try container.decodeIfPresent(UUID.self, forKey: .womanId)
+        partnerId = try container.decodeIfPresent(UUID.self, forKey: .partnerId)
+        inviteCode = try container.decodeIfPresent(String.self, forKey: .inviteCode) ?? LocalCouple.generateInviteCode()
+        isLinked = try container.decodeIfPresent(Bool.self, forKey: .isLinked) ?? false
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, womanId, partnerId, inviteCode, isLinked, createdAt
     }
     
     static func generateInviteCode() -> String {
@@ -129,6 +170,47 @@ enum LHTestResult: String, Codable {
     }
 }
 
+enum TemperatureUnit: String, Codable, CaseIterable {
+    case celsius = "celsius"
+    case fahrenheit = "fahrenheit"
+    
+    var displayName: String {
+        switch self {
+        case .celsius: return "°C"
+        case .fahrenheit: return "°F"
+        }
+    }
+    
+    var fullName: String {
+        switch self {
+        case .celsius: return "Celsius"
+        case .fahrenheit: return "Fahrenheit"
+        }
+    }
+    
+    /// Convert Celsius to display value based on unit preference
+    func displayValue(from celsius: Double) -> Double {
+        switch self {
+        case .celsius: return celsius
+        case .fahrenheit: return (celsius * 9/5) + 32
+        }
+    }
+    
+    /// Convert display value to Celsius for storage
+    func toCelsius(from value: Double) -> Double {
+        switch self {
+        case .celsius: return value
+        case .fahrenheit: return (value - 32) * 5/9
+        }
+    }
+    
+    /// Format temperature for display
+    func format(_ celsius: Double) -> String {
+        let value = displayValue(from: celsius)
+        return String(format: "%.1f%@", value, displayName)
+    }
+}
+
 struct CycleDay: Codable, Identifiable {
     let id: UUID
     let date: Date
@@ -139,13 +221,42 @@ struct CycleDay: Codable, Identifiable {
     var hadIntimacy: Bool
     var intimacyLoggedAt: Date?
     var notes: String?
+    // Temperature tracking (optional)
+    // Note: Temperature is currently stored and displayed only.
+    // It is NOT used to drive ovulation prediction or fertile window logic.
+    // Future versions may use temperature as a secondary confirmation signal.
+    var temperature: Double?  // Stored in Celsius
+    var temperatureLoggedAt: Date?
     
     init(id: UUID = UUID(), date: Date, fertilityLevel: FertilityLevel = .low, isMenstruation: Bool = false, hadIntimacy: Bool = false) {
         self.id = id
-        self.date = date
+        // Normalize to start of day to avoid timezone issues
+        self.date = Calendar.current.startOfDay(for: date)
         self.fertilityLevel = fertilityLevel
         self.isMenstruation = isMenstruation
         self.hadIntimacy = hadIntimacy
+    }
+    
+    // Custom decoding to handle migration from old data without intimacy/temperature fields
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        date = try container.decode(Date.self, forKey: .date)
+        fertilityLevel = try container.decodeIfPresent(FertilityLevel.self, forKey: .fertilityLevel) ?? .low
+        isMenstruation = try container.decodeIfPresent(Bool.self, forKey: .isMenstruation) ?? false
+        lhTestResult = try container.decodeIfPresent(LHTestResult.self, forKey: .lhTestResult)
+        lhTestLoggedAt = try container.decodeIfPresent(Date.self, forKey: .lhTestLoggedAt)
+        // Fields with defaults for migration
+        hadIntimacy = try container.decodeIfPresent(Bool.self, forKey: .hadIntimacy) ?? false
+        intimacyLoggedAt = try container.decodeIfPresent(Date.self, forKey: .intimacyLoggedAt)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        // Temperature fields (optional, null by default)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        temperatureLoggedAt = try container.decodeIfPresent(Date.self, forKey: .temperatureLoggedAt)
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, date, fertilityLevel, isMenstruation, lhTestResult, lhTestLoggedAt, hadIntimacy, intimacyLoggedAt, notes, temperature, temperatureLoggedAt
     }
 }
 
@@ -159,21 +270,47 @@ struct Cycle: Codable, Identifiable {
     var isActive: Bool
     var createdAt: Date
     
-    // Estimated values based on cycle history
-    var estimatedOvulationDay: Int { cycleLength - 14 }
-    var fertileWindowStart: Int { estimatedOvulationDay - 5 }
-    var fertileWindowEnd: Int { estimatedOvulationDay + 1 }
+    // Personalized luteal length for this cycle (stored for historical accuracy)
+    var lutealLength: Int
     
-    init(id: UUID = UUID(), userId: UUID, startDate: Date, cycleLength: Int = 28) {
+    // Estimated ovulation based on personalized luteal phase length
+    // Ovulation typically occurs lutealLength days before the next period
+    var estimatedOvulationDay: Int { max(1, cycleLength - lutealLength) }
+    var fertileWindowStart: Int { max(1, estimatedOvulationDay - 5) }
+    var fertileWindowEnd: Int { min(cycleLength, estimatedOvulationDay + 1) }
+    
+    init(id: UUID = UUID(), userId: UUID, startDate: Date, cycleLength: Int = 28, lutealLength: Int = 14) {
         self.id = id
         self.userId = userId
-        self.startDate = startDate
+        // Normalize to start of day to avoid timezone issues
+        self.startDate = Calendar.current.startOfDay(for: startDate)
         self.cycleLength = cycleLength
+        self.lutealLength = lutealLength
         self.days = []
         self.isActive = true
         self.createdAt = Date()
     }
     
+    // Custom decoding to handle migration from old data without lutealLength field
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        userId = try container.decode(UUID.self, forKey: .userId)
+        startDate = try container.decode(Date.self, forKey: .startDate)
+        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
+        cycleLength = try container.decodeIfPresent(Int.self, forKey: .cycleLength) ?? 28
+        days = try container.decodeIfPresent([CycleDay].self, forKey: .days) ?? []
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        // New field with default for migration
+        lutealLength = try container.decodeIfPresent(Int.self, forKey: .lutealLength) ?? 14
+    }
+    
+    private enum CodingKeys: String, CodingKey {
+        case id, userId, startDate, endDate, cycleLength, days, isActive, createdAt, lutealLength
+    }
+    
+    /// Generate cycle days with fertility levels based on personalized luteal phase
     mutating func generateDays() {
         days = []
         let calendar = Calendar.current
@@ -181,14 +318,19 @@ struct Cycle: Codable, Identifiable {
         // Ensure valid cycle length
         let safeCycleLength = max(1, cycleLength)
         
+        // Ensure startDate is normalized
+        let normalizedStart = calendar.startOfDay(for: startDate)
+        
         for dayOffset in 0..<safeCycleLength {
-            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: startDate) else { continue }
+            guard let date = calendar.date(byAdding: .day, value: dayOffset, to: normalizedStart) else { continue }
             let dayNumber = dayOffset + 1
             
             var fertilityLevel: FertilityLevel = .low
             let isMenstruation = dayNumber <= 5
             
+            // Fertile window: 5 days before ovulation to 1 day after
             if dayNumber >= fertileWindowStart && dayNumber <= fertileWindowEnd {
+                // Peak: ovulation day and day before (highest probability)
                 if dayNumber == estimatedOvulationDay || dayNumber == estimatedOvulationDay - 1 {
                     fertilityLevel = .peak
                 } else {
@@ -264,7 +406,7 @@ struct ActionCard {
 
 enum NotificationType: String, Codable {
     case dailyFertility = "daily_fertility"
-    case lhReminder = "lh_reminder"
+    case lhReminder = "lh_reminder"  // Deprecated: LH reminders removed, kept for backwards compatibility
     case lhPositive = "lh_positive"
     case cycleStart = "cycle_start"
 }

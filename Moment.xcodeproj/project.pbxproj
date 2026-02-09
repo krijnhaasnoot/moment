@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EFC4A6822F393007007874FE /* FirebaseAI in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6812F393007007874FE /* FirebaseAI */; };
+		EFC4A6842F393007007874FE /* FirebaseAILogic in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6832F393007007874FE /* FirebaseAILogic */; };
+		EFC4A6862F393007007874FE /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6852F393007007874FE /* FirebaseAnalytics */; };
+		EFC4A6882F393007007874FE /* FirebaseAnalyticsCore in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6872F393007007874FE /* FirebaseAnalyticsCore */; };
+		EFC4A68A2F393007007874FE /* FirebaseAnalyticsIdentitySupport in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6892F393007007874FE /* FirebaseAnalyticsIdentitySupport */; };
+		EFC4A68F2F3935D2007874FE /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A68E2F3935D2007874FE /* GoogleSignIn */; };
+		EFC4A6912F3935D2007874FE /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EFC4A6902F3935D2007874FE /* GoogleSignInSwift */; };
 		EFDBB2232F1A47F500A6585B /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2222F1A47F500A6585B /* Auth */; };
 		EFDBB2252F1A47F500A6585B /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2242F1A47F500A6585B /* Functions */; };
 		EFDBB2272F1A47F500A6585B /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = EFDBB2262F1A47F500A6585B /* PostgREST */; };
@@ -74,12 +81,19 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EFC4A6842F393007007874FE /* FirebaseAILogic in Frameworks */,
+				EFC4A6822F393007007874FE /* FirebaseAI in Frameworks */,
 				EFDBB2272F1A47F500A6585B /* PostgREST in Frameworks */,
 				EFDBB2252F1A47F500A6585B /* Functions in Frameworks */,
 				EFDBB22D2F1A47F500A6585B /* Supabase in Frameworks */,
+				EFC4A6912F3935D2007874FE /* GoogleSignInSwift in Frameworks */,
+				EFC4A68F2F3935D2007874FE /* GoogleSignIn in Frameworks */,
 				EFDBB2232F1A47F500A6585B /* Auth in Frameworks */,
 				EFDBB22B2F1A47F500A6585B /* Storage in Frameworks */,
+				EFC4A6882F393007007874FE /* FirebaseAnalyticsCore in Frameworks */,
+				EFC4A68A2F393007007874FE /* FirebaseAnalyticsIdentitySupport in Frameworks */,
 				EFDBB2292F1A47F500A6585B /* Realtime in Frameworks */,
+				EFC4A6862F393007007874FE /* FirebaseAnalytics in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,6 +160,13 @@
 				EFDBB2282F1A47F500A6585B /* Realtime */,
 				EFDBB22A2F1A47F500A6585B /* Storage */,
 				EFDBB22C2F1A47F500A6585B /* Supabase */,
+				EFC4A6812F393007007874FE /* FirebaseAI */,
+				EFC4A6832F393007007874FE /* FirebaseAILogic */,
+				EFC4A6852F393007007874FE /* FirebaseAnalytics */,
+				EFC4A6872F393007007874FE /* FirebaseAnalyticsCore */,
+				EFC4A6892F393007007874FE /* FirebaseAnalyticsIdentitySupport */,
+				EFC4A68E2F3935D2007874FE /* GoogleSignIn */,
+				EFC4A6902F3935D2007874FE /* GoogleSignInSwift */,
 			);
 			productName = Moment;
 			productReference = EFDBB1D72F1A42FD00A6585B /* Moment.app */;
@@ -231,6 +252,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				EFC4A68D2F3935D2007874FE /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EFDBB1D82F1A42FD00A6585B /* Products */;
@@ -435,12 +458,12 @@
 				CODE_SIGN_ENTITLEMENTS = Moment/Moment.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = 9V592235FH;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Moment/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Moment by Kinder";
+				INFOPLIST_KEY_CFBundleDisplayName = "Moment ";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -474,12 +497,12 @@
 				CODE_SIGN_ENTITLEMENTS = Moment/Moment.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 9;
 				DEVELOPMENT_TEAM = 9V592235FH;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Moment/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Moment by Kinder";
+				INFOPLIST_KEY_CFBundleDisplayName = "Moment ";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -631,6 +654,22 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.9.0;
+			};
+		};
+		EFC4A68D2F3935D2007874FE /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.1.0;
+			};
+		};
 		EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/supabase/supabase-swift";
@@ -642,6 +681,41 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		EFC4A6812F393007007874FE /* FirebaseAI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAI;
+		};
+		EFC4A6832F393007007874FE /* FirebaseAILogic */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAILogic;
+		};
+		EFC4A6852F393007007874FE /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		EFC4A6872F393007007874FE /* FirebaseAnalyticsCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsCore;
+		};
+		EFC4A6892F393007007874FE /* FirebaseAnalyticsIdentitySupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A6802F393007007874FE /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalyticsIdentitySupport;
+		};
+		EFC4A68E2F3935D2007874FE /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A68D2F3935D2007874FE /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		EFC4A6902F3935D2007874FE /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EFC4A68D2F3935D2007874FE /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
 		EFDBB2222F1A47F500A6585B /* Auth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = EFDBB2212F1A47F500A6585B /* XCRemoteSwiftPackageReference "supabase-swift" */;

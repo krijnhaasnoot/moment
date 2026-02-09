@@ -21,19 +21,41 @@ CREATE TABLE public.profiles (
     notification_tone TEXT NOT NULL DEFAULT 'discreet' CHECK (notification_tone IN ('discreet', 'explicit')),
     notifications_enabled BOOLEAN NOT NULL DEFAULT true,
     push_token TEXT,
+    profile_photo_url TEXT,  -- URL to profile photo in Supabase Storage
+    -- Cycle learning: personalized luteal phase estimation based on LH test history
+    -- These fields help refine ovulation timing estimates over time
+    average_luteal_length INTEGER NOT NULL DEFAULT 14,  -- Days from LH surge to next period (typical: 12-16)
+    luteal_samples INTEGER NOT NULL DEFAULT 0,          -- Number of LH→period observations used
+    -- Temperature tracking preferences (optional feature, OFF by default)
+    -- Temperature is stored but NOT currently used for fertility predictions
+    temperature_tracking_enabled BOOLEAN NOT NULL DEFAULT false,
+    temperature_info_acknowledged BOOLEAN NOT NULL DEFAULT false,
+    temperature_unit TEXT NOT NULL DEFAULT 'celsius' CHECK (temperature_unit IN ('celsius', 'fahrenheit')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Migration: Add luteal learning columns if table exists
+-- Run this if upgrading from previous schema:
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS average_luteal_length INTEGER NOT NULL DEFAULT 14;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS luteal_samples INTEGER NOT NULL DEFAULT 0;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS profile_photo_url TEXT;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS temperature_tracking_enabled BOOLEAN NOT NULL DEFAULT false;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS temperature_info_acknowledged BOOLEAN NOT NULL DEFAULT false;
+-- ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS temperature_unit TEXT NOT NULL DEFAULT 'celsius';
+
 -- Couples table
+-- Either woman_id or partner_id can create the couple (the other joins via invite code)
 CREATE TABLE public.couples (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    woman_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    woman_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
     partner_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     invite_code TEXT NOT NULL UNIQUE,
     is_linked BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT at_least_one_member CHECK (woman_id IS NOT NULL OR partner_id IS NOT NULL)
 );
 
 -- Add foreign key from profiles to couples
@@ -65,6 +87,12 @@ CREATE TABLE public.cycle_days (
     lh_test_logged_at TIMESTAMPTZ,
     had_intimacy BOOLEAN DEFAULT false,
     notes TEXT,
+    -- Temperature tracking (optional)
+    -- Note: Temperature is currently stored and displayed only.
+    -- It is NOT used to drive ovulation prediction or fertile window logic.
+    -- Future versions may use temperature as a secondary confirmation signal.
+    temperature DECIMAL(4,2),  -- Basal body temperature in Celsius
+    temperature_logged_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(cycle_id, date)
@@ -73,6 +101,8 @@ CREATE TABLE public.cycle_days (
 -- Migration: Add had_intimacy column if table exists
 -- Run this if upgrading from previous schema:
 -- ALTER TABLE public.cycle_days ADD COLUMN IF NOT EXISTS had_intimacy BOOLEAN DEFAULT false;
+-- ALTER TABLE public.cycle_days ADD COLUMN IF NOT EXISTS temperature DECIMAL(4,2);
+-- ALTER TABLE public.cycle_days ADD COLUMN IF NOT EXISTS temperature_logged_at TIMESTAMPTZ;
 
 -- Notifications log (for tracking sent notifications)
 CREATE TABLE public.notification_log (
@@ -124,17 +154,17 @@ CREATE POLICY "Users can view partner profile" ON public.profiles
         )
     );
 
--- Couples: Woman can manage her couple
-CREATE POLICY "Woman can manage couple" ON public.couples
+-- Couples: Creator can manage their couple
+CREATE POLICY "Creator can manage couple" ON public.couples
+    FOR ALL USING (created_by = auth.uid());
+
+-- Couples: Woman can view/update couple they're part of
+CREATE POLICY "Woman can access couple" ON public.couples
     FOR ALL USING (woman_id = auth.uid());
 
--- Couples: Partner can view couple they're part of
-CREATE POLICY "Partner can view couple" ON public.couples
-    FOR SELECT USING (partner_id = auth.uid());
-
--- Couples: Partner can update couple to unlink themselves
-CREATE POLICY "Partner can update couple" ON public.couples
-    FOR UPDATE USING (partner_id = auth.uid());
+-- Couples: Partner can view/update couple they're part of
+CREATE POLICY "Partner can access couple" ON public.couples
+    FOR ALL USING (partner_id = auth.uid());
 
 -- Couples: Anyone can view couple by invite code (for joining)
 CREATE POLICY "Anyone can view couple by invite code" ON public.couples
@@ -206,7 +236,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to create a couple when woman signs up
+-- Function to create a couple when woman signs up (auto-trigger)
+-- Note: Partners create couples manually via the app, not via trigger
 CREATE OR REPLACE FUNCTION create_couple_for_woman()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -220,9 +251,9 @@ BEGIN
             EXIT WHEN NOT EXISTS (SELECT 1 FROM public.couples WHERE invite_code = new_invite_code);
         END LOOP;
         
-        -- Create couple
-        INSERT INTO public.couples (woman_id, invite_code)
-        VALUES (NEW.id, new_invite_code)
+        -- Create couple with woman as creator
+        INSERT INTO public.couples (woman_id, created_by, invite_code)
+        VALUES (NEW.id, NEW.id, new_invite_code)
         RETURNING id INTO new_couple_id;
         
         -- Update profile with couple_id
@@ -353,3 +384,45 @@ CREATE TRIGGER sync_cycles_on_couple_link
 ALTER PUBLICATION supabase_realtime ADD TABLE public.couples;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.cycle_days;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.cycles;
+
+-- ============================================
+-- STORAGE: Profile Photos
+-- ============================================
+-- STEP 1: Create bucket in Supabase Dashboard > Storage > New Bucket
+--   Name: profile-photos
+--   Public bucket: OFF (private - we use signed URLs for security)
+--   File size limit: 5MB
+--   Allowed MIME types: image/jpeg, image/png, image/webp
+
+-- STEP 2: Run these SQL commands in SQL Editor to set up RLS policies
+
+-- Allow users to upload their own profile photo (files in their own folder)
+CREATE POLICY "Users can upload own profile photo"
+ON storage.objects FOR INSERT TO authenticated
+WITH CHECK (
+    bucket_id = 'profile-photos' 
+    AND (storage.foldername(name))[1] = auth.uid()::text
+);
+
+-- Allow users to update their own profile photo
+CREATE POLICY "Users can update own profile photo"
+ON storage.objects FOR UPDATE TO authenticated
+USING (
+    bucket_id = 'profile-photos' 
+    AND (storage.foldername(name))[1] = auth.uid()::text
+);
+
+-- Allow users to delete their own profile photo
+CREATE POLICY "Users can delete own profile photo"
+ON storage.objects FOR DELETE TO authenticated
+USING (
+    bucket_id = 'profile-photos' 
+    AND (storage.foldername(name))[1] = auth.uid()::text
+);
+
+-- Allow authenticated users to view photos via signed URLs
+-- Signed URLs bypass RLS but still require the token, so this policy
+-- is mainly for direct authenticated access if needed
+CREATE POLICY "Authenticated users can view profile photos"
+ON storage.objects FOR SELECT TO authenticated
+USING (bucket_id = 'profile-photos');

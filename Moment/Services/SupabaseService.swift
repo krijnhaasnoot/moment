@@ -15,6 +15,19 @@ enum SupabaseConfig {
     static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR5bXZkdm95ZmpweGNlc2p3YmdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1Mzg4MTMsImV4cCI6MjA4NDExNDgxM30.KQc2vjaEBb300AXk1fUsa_79PjtiRqAEOLDOUEATNJE"
 }
 
+// MARK: - Date Formatting Helpers
+
+/// Date-only formatter for database DATE columns (yyyy-MM-dd)
+/// IMPORTANT: Always use this for cycle_days.date, cycles.start_date, cycles.end_date
+/// Using ISO8601DateFormatter causes timezone issues (dates shift by 1 day)
+private let dateOnlyFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.timeZone = .current  // Use local timezone for date-only fields
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    return formatter
+}()
+
 // MARK: - Supabase Service
 
 @Observable
@@ -205,9 +218,12 @@ final class SupabaseService {
             // Current user is woman, get partner's name
             guard let pid = couple.partnerId else { return nil }
             partnerId = pid
-        } else {
+        } else if currentUserId == couple.partnerId {
             // Current user is partner, get woman's name
-            partnerId = couple.womanId
+            guard let wid = couple.womanId else { return nil }
+            partnerId = wid
+        } else {
+            return nil
         }
         
         let partnerProfile = try await getProfileById(partnerId)
@@ -241,6 +257,97 @@ final class SupabaseService {
             .update(["push_token": token])
             .eq("id", value: userId.uuidString)
             .execute()
+    }
+    
+    // MARK: - Profile Photo
+    
+    /// Upload profile photo to Supabase Storage
+    func uploadProfilePhoto(_ imageData: Data) async throws -> String {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        // Use lowercase UUID to match PostgreSQL's auth.uid()::text
+        let filePath = "\(userId.uuidString.lowercased())/profile.jpg"
+        
+        // Upload to Storage
+        try await client.storage
+            .from("profile-photos")
+            .upload(
+                filePath,
+                data: imageData,
+                options: .init(
+                    contentType: "image/jpeg",
+                    upsert: true
+                )
+            )
+        
+        // Get signed URL (valid for 1 year)
+        let signedUrl = try await client.storage
+            .from("profile-photos")
+            .createSignedURL(path: filePath, expiresIn: 31536000)  // 1 year
+        
+        let urlString = signedUrl.absoluteString
+        
+        // Update profile with URL
+        let update = ProfileUpdate(profilePhotoUrl: urlString)
+        try await client
+            .from("profiles")
+            .update(update)
+            .eq("id", value: userId.uuidString)
+            .execute()
+        
+        print("✅ Uploaded profile photo: \(urlString)")
+        return urlString
+    }
+    
+    /// Delete profile photo from Supabase Storage
+    func deleteProfilePhoto() async throws {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        // Use lowercase UUID to match PostgreSQL's auth.uid()::text
+        let filePath = "\(userId.uuidString.lowercased())/profile.jpg"
+        
+        // Delete from Storage
+        try await client.storage
+            .from("profile-photos")
+            .remove(paths: [filePath])
+        
+        // Clear URL from profile
+        try await client
+            .from("profiles")
+            .update(["profile_photo_url": AnyJSON.null])
+            .eq("id", value: userId.uuidString)
+            .execute()
+        
+        print("✅ Deleted profile photo")
+    }
+    
+    /// Get partner's profile (including photo URL)
+    func getPartnerProfile() async throws -> Profile? {
+        guard let couple = try await getCouple(), couple.isLinked else {
+            return nil
+        }
+        
+        guard let currentUserId = client.auth.currentUser?.id else {
+            return nil
+        }
+        
+        // Determine partner's ID based on current user's role
+        let partnerId: UUID
+        if currentUserId == couple.womanId {
+            guard let pid = couple.partnerId else { return nil }
+            partnerId = pid
+        } else if currentUserId == couple.partnerId {
+            guard let wid = couple.womanId else { return nil }
+            partnerId = wid
+        } else {
+            return nil
+        }
+        
+        return try await getProfileById(partnerId)
     }
     
     // MARK: - Couple Management
@@ -282,6 +389,111 @@ final class SupabaseService {
         }
     }
     
+    /// Ensure a couple exists for the current user.
+    /// If no couple exists, creates one and returns it.
+    func ensureCouple() async throws -> Couple {
+        // First try to get existing couple
+        if let existingCouple = try await getCouple() {
+            return existingCouple
+        }
+        
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        // Get user's role
+        let profile = try await getProfile()
+        let isWoman = profile.role == "woman"
+        
+        print("📝 Creating couple for user \(userId) with role \(profile.role)")
+        
+        // Generate invite code
+        let inviteCode = generateInviteCode()
+        
+        // Create couple
+        struct CoupleInsert: Encodable {
+            let woman_id: String?
+            let partner_id: String?
+            let created_by: String
+            let invite_code: String
+        }
+        
+        let insert = CoupleInsert(
+            woman_id: isWoman ? userId.uuidString : nil,
+            partner_id: isWoman ? nil : userId.uuidString,
+            created_by: userId.uuidString,
+            invite_code: inviteCode
+        )
+        
+        let couple: Couple = try await client
+            .from("couples")
+            .insert(insert)
+            .select()
+            .single()
+            .execute()
+            .value
+        
+        // Update profile with couple_id
+        struct ProfileCoupleUpdate: Encodable {
+            let couple_id: String
+        }
+        
+        try await client
+            .from("profiles")
+            .update(ProfileCoupleUpdate(couple_id: couple.id.uuidString))
+            .eq("id", value: userId.uuidString)
+            .execute()
+        
+        print("✅ Created couple with invite code: \(inviteCode)")
+        
+        return couple
+    }
+    
+    /// Generate a random 6-character invite code
+    private func generateInviteCode() -> String {
+        let chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return String((0..<6).map { _ in chars.randomElement()! })
+    }
+    
+    /// Disconnect from partner - removes the partner link but keeps the couple record
+    func disconnectCouple() async throws {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        guard let couple = try await getCouple() else {
+            throw SupabaseError.syncFailed("No couple found")
+        }
+        
+        print("🔗 Disconnecting couple: \(couple.id)")
+        
+        let isWoman = couple.womanId == userId
+        
+        // Generate a new invite code for future connection
+        let newInviteCode = generateInviteCode()
+        
+        struct CoupleDisconnect: Encodable {
+            let woman_id: String?
+            let partner_id: String?
+            let invite_code: String
+        }
+        
+        // Keep the current user, remove the other partner
+        let update = CoupleDisconnect(
+            woman_id: isWoman ? userId.uuidString : nil,
+            partner_id: isWoman ? nil : userId.uuidString,
+            invite_code: newInviteCode
+        )
+        
+        try await client
+            .from("couples")
+            .update(update)
+            .eq("id", value: couple.id.uuidString)
+            .execute()
+        
+        print("✅ Disconnected from partner, new invite code: \(newInviteCode)")
+    }
+    
     /// Delete all user data from Supabase (for reset)
     func deleteUserData() async throws {
         guard let userId = client.auth.currentUser?.id else {
@@ -301,8 +513,12 @@ final class SupabaseService {
             
             print("✅ Deleted cycles")
             
-            // If user is the woman (owner), delete the couple
-            if couple.womanId == userId {
+            // Determine if user is the creator/owner of the couple
+            let isWoman = couple.womanId == userId
+            let isPartnerCreator = couple.partnerId == userId && couple.womanId == nil
+            
+            if isWoman || isPartnerCreator {
+                // User created the couple - delete it entirely
                 try await client
                     .from("couples")
                     .delete()
@@ -310,17 +526,28 @@ final class SupabaseService {
                     .execute()
                 print("✅ Deleted couple")
             } else {
-                // If user is partner, just unlink from the couple
-                struct CoupleUnlink: Encodable {
-                    let partner_id: String?
-                    let is_linked: Bool
+                // User joined the couple - just unlink
+                if couple.womanId == userId {
+                    struct WomanUnlink: Encodable {
+                        let woman_id: String?
+                        let is_linked: Bool
+                    }
+                    try await client
+                        .from("couples")
+                        .update(WomanUnlink(woman_id: nil, is_linked: false))
+                        .eq("id", value: couple.id.uuidString)
+                        .execute()
+                } else {
+                    struct PartnerUnlink: Encodable {
+                        let partner_id: String?
+                        let is_linked: Bool
+                    }
+                    try await client
+                        .from("couples")
+                        .update(PartnerUnlink(partner_id: nil, is_linked: false))
+                        .eq("id", value: couple.id.uuidString)
+                        .execute()
                 }
-                
-                try await client
-                    .from("couples")
-                    .update(CoupleUnlink(partner_id: nil, is_linked: false))
-                    .eq("id", value: couple.id.uuidString)
-                    .execute()
                 print("✅ Unlinked from couple")
             }
         }
@@ -360,23 +587,111 @@ final class SupabaseService {
             return JoinCoupleResult(success: false, error: "Invalid invite code", coupleId: nil)
         }
         
+        print("🔍 JOIN DEBUG - Couple found:")
+        print("   - couple.id: \(couple.id)")
+        print("   - couple.womanId: \(couple.womanId?.uuidString ?? "nil")")
+        print("   - couple.partnerId: \(couple.partnerId?.uuidString ?? "nil")")
+        print("   - couple.isLinked: \(couple.isLinked)")
+        
         if couple.isLinked {
             return JoinCoupleResult(success: false, error: "This couple is already linked", coupleId: nil)
         }
         
-        // Update the couple to link the partner
-        struct CoupleUpdate: Encodable {
-            let partner_id: String
-            let is_linked: Bool
+        // Get the joiner's profile to determine their role
+        let profile: Profile = try await client
+            .from("profiles")
+            .select()
+            .eq("id", value: userId.uuidString)
+            .single()
+            .execute()
+            .value
+        
+        print("🔍 JOIN DEBUG - Joiner profile:")
+        print("   - profile.id: \(profile.id)")
+        print("   - profile.name: \(profile.name)")
+        print("   - profile.role: \(profile.role)")
+        print("   - profile.coupleId: \(profile.coupleId?.uuidString ?? "nil")")
+        
+        // Role-agnostic joining: fill the appropriate slot based on joiner's role
+        // If couple is NOT linked yet, we can overwrite previous incomplete attempts
+        print("🔍 JOIN DEBUG - Checking conditions:")
+        print("   - couple.womanId: \(couple.womanId?.uuidString ?? "nil")")
+        print("   - couple.partnerId: \(couple.partnerId?.uuidString ?? "nil")")
+        print("   - couple.isLinked: \(couple.isLinked)")
+        print("   - profile.role: \(profile.role)")
+        
+        if profile.role == "woman" {
+            // Joiner is woman - check if woman slot is available OR couple not yet linked (can overwrite)
+            if couple.womanId == nil || !couple.isLinked {
+                struct WomanJoinUpdate: Encodable {
+                    let woman_id: String
+                    let is_linked: Bool
+                }
+                
+                // Check if there's a partner to link with
+                let willBeLinked = couple.partnerId != nil
+                
+                try await client
+                    .from("couples")
+                    .update(WomanJoinUpdate(woman_id: userId.uuidString, is_linked: willBeLinked))
+                    .eq("id", value: couple.id.uuidString)
+                    .execute()
+                
+                print("✅ Woman joined couple, is_linked: \(willBeLinked)")
+            } else {
+                // Woman slot taken AND couple is already linked
+                return JoinCoupleResult(success: false, error: "This couple is already fully connected.", coupleId: nil)
+            }
+        } else if profile.role == "partner" {
+            // Joiner is partner - check if partner slot is available OR couple not yet linked (can overwrite)
+            if couple.partnerId == nil || !couple.isLinked {
+                struct PartnerJoinUpdate: Encodable {
+                    let partner_id: String
+                    let is_linked: Bool
+                }
+                
+                // Check if there's a woman to link with
+                let willBeLinked = couple.womanId != nil
+                
+                try await client
+                    .from("couples")
+                    .update(PartnerJoinUpdate(partner_id: userId.uuidString, is_linked: willBeLinked))
+                    .eq("id", value: couple.id.uuidString)
+                    .execute()
+                
+                print("✅ Partner joined couple, is_linked: \(willBeLinked)")
+            } else {
+                // Partner slot taken AND couple is already linked
+                return JoinCoupleResult(success: false, error: "This couple is already fully connected.", coupleId: nil)
+            }
+        } else {
+            return JoinCoupleResult(success: false, error: "Unknown role: \(profile.role)", coupleId: nil)
         }
         
-        try await client
-            .from("couples")
-            .update(CoupleUpdate(partner_id: userId.uuidString, is_linked: true))
-            .eq("id", value: couple.id.uuidString)
-            .execute()
+        // Clean up joiner's old couple if they had one (from a previous incomplete onboarding)
+        if let oldCoupleId = profile.coupleId, oldCoupleId != couple.id {
+            print("🧹 Cleaning up joiner's old couple: \(oldCoupleId)")
+            
+            // Check if old couple is linked - if not, delete it
+            let oldCouples: [Couple] = try await client
+                .from("couples")
+                .select()
+                .eq("id", value: oldCoupleId.uuidString)
+                .execute()
+                .value
+            
+            if let oldCouple = oldCouples.first, !oldCouple.isLinked {
+                // Delete the orphan couple
+                try await client
+                    .from("couples")
+                    .delete()
+                    .eq("id", value: oldCoupleId.uuidString)
+                    .execute()
+                print("✅ Deleted orphan couple")
+            }
+        }
         
-        // Update partner's profile with couple_id
+        // Update joiner's profile with couple_id
         struct ProfileCoupleUpdate: Encodable {
             let couple_id: String
         }
@@ -386,6 +701,26 @@ final class SupabaseService {
             .update(ProfileCoupleUpdate(couple_id: couple.id.uuidString))
             .eq("id", value: userId.uuidString)
             .execute()
+        
+        print("✅ Updated joiner's profile with new couple_id: \(couple.id)")
+        
+        // Sync couple_id to any existing cycles (for both woman and partner joining scenarios)
+        // This ensures the partner can see the cycle data immediately
+        if let womanId = couple.womanId ?? (profile.role == "woman" ? userId : nil) {
+            print("🔄 Syncing couple_id to woman's cycles...")
+            struct CycleCoupleUpdate: Encodable {
+                let couple_id: String
+            }
+            
+            _ = try? await client
+                .from("cycles")
+                .update(CycleCoupleUpdate(couple_id: couple.id.uuidString))
+                .eq("user_id", value: womanId.uuidString)
+                .is("couple_id", value: nil)
+                .execute()
+            
+            print("✅ Synced couple_id to woman's cycles")
+        }
         
         return JoinCoupleResult(success: true, error: nil, coupleId: couple.id)
     }
@@ -419,10 +754,15 @@ final class SupabaseService {
             return nil
         }
         
-        print("📋 Couple found: \(couple.id), isLinked: \(couple.isLinked), womanId: \(couple.womanId)")
+        print("📋 Couple found: \(couple.id), isLinked: \(couple.isLinked), womanId: \(couple.womanId?.uuidString ?? "nil")")
         
         guard couple.isLinked else {
             print("⚠️ Couple is not linked yet")
+            return nil
+        }
+        
+        guard let womanId = couple.womanId else {
+            print("⚠️ No woman linked to couple yet")
             return nil
         }
         
@@ -445,12 +785,12 @@ final class SupabaseService {
                 print("⚠️ No cycle found for couple_id \(couple.id): \(error)")
                 
                 // Try fetching by woman_id instead (fallback)
-                print("🔄 Trying to fetch by woman_id: \(couple.womanId)")
+                print("🔄 Trying to fetch by woman_id: \(womanId)")
                 do {
                     let cycle: CycleRecord = try await self.client
                         .from("cycles")
                         .select("*, cycle_days(id, cycle_id, date, fertility_level, is_menstruation, lh_test_result, had_intimacy)")
-                        .eq("user_id", value: couple.womanId.uuidString)
+                        .eq("user_id", value: womanId.uuidString)
                         .eq("is_active", value: true)
                         .single()
                         .execute()
@@ -484,7 +824,7 @@ final class SupabaseService {
     }
     
     /// Create new cycle
-    func createCycle(startDate: Date, cycleLength: Int = 28) async throws -> CycleRecord {
+    func createCycle(startDate: Date, cycleLength: Int = 28, lutealLength: Int = 14) async throws -> CycleRecord {
         guard let userId = client.auth.currentUser?.id else {
             throw SupabaseError.notAuthenticated
         }
@@ -498,7 +838,7 @@ final class SupabaseService {
         }
         let deactivateData = CycleDeactivate(
             is_active: false,
-            end_date: ISO8601DateFormatter().string(from: Date())
+            end_date: dateOnlyFormatter.string(from: Date())
         )
         try await client
             .from("cycles")
@@ -524,24 +864,92 @@ final class SupabaseService {
             .execute()
             .value
         
-        // Generate cycle days
-        try await generateCycleDays(for: cycle)
+        // Generate cycle days using personalized luteal length
+        try await generateCycleDays(for: cycle, lutealLength: lutealLength)
         
         // Fetch complete cycle with days
-        return try await getActiveCycle()!
+        guard let completeCycle = try await getActiveCycle() else {
+            throw SupabaseError.syncFailed("Failed to retrieve created cycle")
+        }
+        return completeCycle
     }
     
-    /// Generate cycle days for a cycle
-    private func generateCycleDays(for cycle: CycleRecord) async throws {
+    /// Update the start date of an existing cycle
+    /// This will recalculate all cycle days based on the new start date
+    func updateCycleStartDate(cycleId: UUID, newStartDate: Date) async throws {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        print("📅 Updating cycle \(cycleId) start date to \(newStartDate)")
+        
+        // Get current cycle to preserve cycle length
+        let currentCycle: CycleRecord = try await client
+            .from("cycles")
+            .select()
+            .eq("id", value: cycleId.uuidString)
+            .single()
+            .execute()
+            .value
+        
+        // Delete existing cycle days
+        try await client
+            .from("cycle_days")
+            .delete()
+            .eq("cycle_id", value: cycleId.uuidString)
+            .execute()
+        
+        // Update cycle start date
+        struct CycleUpdate: Encodable {
+            let start_date: String
+        }
+        
+        try await client
+            .from("cycles")
+            .update(CycleUpdate(start_date: dateOnlyFormatter.string(from: newStartDate)))
+            .eq("id", value: cycleId.uuidString)
+            .execute()
+        
+        // Regenerate cycle days with new start date
+        let updatedCycle = CycleRecord(
+            id: currentCycle.id,
+            userId: currentCycle.userId,
+            coupleId: currentCycle.coupleId,
+            startDate: newStartDate,
+            endDate: currentCycle.endDate,
+            cycleLength: currentCycle.cycleLength,
+            isActive: currentCycle.isActive,
+            createdAt: currentCycle.createdAt,
+            updatedAt: Date(),
+            cycleDays: nil
+        )
+        
+        // Get user's personalized luteal length
+        let profile = try await getProfile()
+        let lutealLength = profile.averageLutealLength
+        
+        try await generateCycleDays(for: updatedCycle, lutealLength: lutealLength)
+        
+        print("✅ Cycle start date updated and days regenerated")
+    }
+    
+    /// Generate cycle days for a cycle using personalized luteal phase length
+    /// - Parameters:
+    ///   - cycle: The cycle record to generate days for
+    ///   - lutealLength: Personalized luteal phase length (default 14 if no learning data)
+    private func generateCycleDays(for cycle: CycleRecord, lutealLength: Int = 14) async throws {
         let calendar = Calendar.current
         var days: [CycleDayInsert] = []
         
         // Ensure valid cycle length
         let cycleLength = max(1, cycle.cycleLength)
         
-        let ovulationDay = max(1, cycleLength - 14)
+        // Use personalized luteal length for ovulation estimation
+        // Ovulation occurs approximately lutealLength days before the next period
+        let safeLutealLength = max(8, min(lutealLength, 18))  // Clamp to physiological range
+        let ovulationDay = max(1, cycleLength - safeLutealLength)
         let fertileStart = max(1, ovulationDay - 5)
-        let fertileEnd = ovulationDay + 1
+        let fertileEnd = min(cycleLength, ovulationDay + 1)
         
         for dayOffset in 0..<cycleLength {
             guard let date = calendar.date(byAdding: .day, value: dayOffset, to: cycle.startDate) else { continue }
@@ -550,7 +958,9 @@ final class SupabaseService {
             var fertilityLevel = "low"
             let isMenstruation = dayNumber <= 5
             
+            // Fertile window: 5 days before ovulation to 1 day after
             if dayNumber >= fertileStart && dayNumber <= fertileEnd {
+                // Peak: ovulation day and day before (highest probability)
                 if dayNumber == ovulationDay || dayNumber == ovulationDay - 1 {
                     fertilityLevel = "peak"
                 } else {
@@ -570,6 +980,76 @@ final class SupabaseService {
             .from("cycle_days")
             .insert(days)
             .execute()
+    }
+    
+    /// Update profile's luteal learning data after a cycle with LH data completes
+    func updateLutealLearning(averageLutealLength: Int, lutealSamples: Int) async throws {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        let update = ProfileUpdate(
+            averageLutealLength: averageLutealLength,
+            lutealSamples: lutealSamples
+        )
+        
+        try await client
+            .from("profiles")
+            .update(update)
+            .eq("id", value: userId.uuidString)
+            .execute()
+        
+        print("✅ Updated luteal learning: avg=\(averageLutealLength), samples=\(lutealSamples)")
+    }
+    
+    /// Get current user's luteal learning data
+    func getLutealLearning() async throws -> (averageLutealLength: Int, lutealSamples: Int) {
+        guard let userId = client.auth.currentUser?.id else {
+            throw SupabaseError.notAuthenticated
+        }
+        
+        return try await getLutealLearning(for: userId)
+    }
+    
+    /// Get luteal learning data for a specific user (used by partners to get woman's data)
+    func getLutealLearning(for userId: UUID) async throws -> (averageLutealLength: Int, lutealSamples: Int) {
+        struct LutealData: Codable {
+            let averageLutealLength: Int
+            let lutealSamples: Int
+            
+            enum CodingKeys: String, CodingKey {
+                case averageLutealLength = "average_luteal_length"
+                case lutealSamples = "luteal_samples"
+            }
+            
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                averageLutealLength = try container.decodeIfPresent(Int.self, forKey: .averageLutealLength) ?? 14
+                lutealSamples = try container.decodeIfPresent(Int.self, forKey: .lutealSamples) ?? 0
+            }
+        }
+        
+        let data: LutealData = try await client
+            .from("profiles")
+            .select("average_luteal_length, luteal_samples")
+            .eq("id", value: userId.uuidString)
+            .single()
+            .execute()
+            .value
+        
+        return (data.averageLutealLength, data.lutealSamples)
+    }
+    
+    /// Get partner's (woman's) luteal learning data for accurate cycle display
+    func getPartnerLutealLearning() async throws -> Int {
+        guard let couple = try await getCouple(), couple.isLinked, let womanId = couple.womanId else {
+            return 14  // Default if not linked or no woman
+        }
+        
+        let (averageLutealLength, lutealSamples) = try await getLutealLearning(for: womanId)
+        
+        // Only use personalized value if we have learning data
+        return lutealSamples > 0 ? averageLutealLength : 14
     }
     
     /// Update cycle's couple_id if missing
@@ -617,7 +1097,7 @@ final class SupabaseService {
     
     /// Log LH test result
     func logLHTest(cycleId: UUID, date: Date, result: String) async throws -> CycleDayRecord {
-        let dateString = ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: date))
+        let dateString = dateOnlyFormatter.string(from: date)
         
         var updates: [String: AnyJSON] = [
             "lh_test_result": .string(result),
@@ -659,12 +1139,12 @@ final class SupabaseService {
         
         if let cycle = try? await getActiveCycle() {
             cycleId = cycle.id
-        } else if let couple = try? await getCouple(), couple.isLinked {
+        } else if let couple = try? await getCouple(), couple.isLinked, let womanId = couple.womanId {
             // Partner - get the woman's cycle
             let cycle: CycleRecord? = try await client
                 .from("cycles")
                 .select()
-                .eq("user_id", value: couple.womanId.uuidString)
+                .eq("user_id", value: womanId.uuidString)
                 .eq("is_active", value: true)
                 .single()
                 .execute()
@@ -677,7 +1157,7 @@ final class SupabaseService {
             return
         }
         
-        let dateString = ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: date))
+        let dateString = dateOnlyFormatter.string(from: date)
         
         struct IntimacyUpdate: Encodable {
             let had_intimacy: Bool
@@ -848,6 +1328,14 @@ struct Profile: Codable {
     var notificationTone: String
     var notificationsEnabled: Bool
     var pushToken: String?
+    var profilePhotoUrl: String?
+    // Cycle learning: personalized luteal phase
+    var averageLutealLength: Int
+    var lutealSamples: Int
+    // Temperature tracking preferences (optional feature, OFF by default)
+    var temperatureTrackingEnabled: Bool
+    var temperatureInfoAcknowledged: Bool
+    var temperatureUnit: String  // "celsius" or "fahrenheit"
     let createdAt: Date
     var updatedAt: Date
     
@@ -857,8 +1345,35 @@ struct Profile: Codable {
         case notificationTone = "notification_tone"
         case notificationsEnabled = "notifications_enabled"
         case pushToken = "push_token"
+        case profilePhotoUrl = "profile_photo_url"
+        case averageLutealLength = "average_luteal_length"
+        case lutealSamples = "luteal_samples"
+        case temperatureTrackingEnabled = "temperature_tracking_enabled"
+        case temperatureInfoAcknowledged = "temperature_info_acknowledged"
+        case temperatureUnit = "temperature_unit"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        role = try container.decode(String.self, forKey: .role)
+        coupleId = try container.decodeIfPresent(UUID.self, forKey: .coupleId)
+        notificationTone = try container.decode(String.self, forKey: .notificationTone)
+        notificationsEnabled = try container.decode(Bool.self, forKey: .notificationsEnabled)
+        pushToken = try container.decodeIfPresent(String.self, forKey: .pushToken)
+        profilePhotoUrl = try container.decodeIfPresent(String.self, forKey: .profilePhotoUrl)
+        // Provide defaults for new fields (backwards compatibility)
+        averageLutealLength = try container.decodeIfPresent(Int.self, forKey: .averageLutealLength) ?? 14
+        lutealSamples = try container.decodeIfPresent(Int.self, forKey: .lutealSamples) ?? 0
+        // Temperature tracking: OFF by default
+        temperatureTrackingEnabled = try container.decodeIfPresent(Bool.self, forKey: .temperatureTrackingEnabled) ?? false
+        temperatureInfoAcknowledged = try container.decodeIfPresent(Bool.self, forKey: .temperatureInfoAcknowledged) ?? false
+        temperatureUnit = try container.decodeIfPresent(String.self, forKey: .temperatureUnit) ?? "celsius"
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 }
 
@@ -881,18 +1396,31 @@ struct ProfileUpdate: Codable {
     var notificationTone: String?
     var notificationsEnabled: Bool?
     var pushToken: String?
+    var profilePhotoUrl: String?
+    var averageLutealLength: Int?
+    var lutealSamples: Int?
+    // Temperature tracking preferences
+    var temperatureTrackingEnabled: Bool?
+    var temperatureInfoAcknowledged: Bool?
+    var temperatureUnit: String?
     
     enum CodingKeys: String, CodingKey {
         case name
         case notificationTone = "notification_tone"
         case notificationsEnabled = "notifications_enabled"
         case pushToken = "push_token"
+        case profilePhotoUrl = "profile_photo_url"
+        case averageLutealLength = "average_luteal_length"
+        case lutealSamples = "luteal_samples"
+        case temperatureTrackingEnabled = "temperature_tracking_enabled"
+        case temperatureInfoAcknowledged = "temperature_info_acknowledged"
+        case temperatureUnit = "temperature_unit"
     }
 }
 
 struct Couple: Codable {
     let id: UUID
-    let womanId: UUID
+    var womanId: UUID?  // Optional: null when partner creates the couple
     var partnerId: UUID?
     let inviteCode: String
     var isLinked: Bool
@@ -1040,6 +1568,12 @@ struct CycleDayRecord: Codable {
     var lhTestLoggedAt: Date?
     var notes: String?
     var hadIntimacy: Bool?
+    // Temperature tracking (optional)
+    // Note: Temperature is currently stored and displayed only.
+    // It is NOT used to drive ovulation prediction or fertile window logic.
+    // Future versions may use temperature as a secondary confirmation signal.
+    var temperature: Double?
+    var temperatureLoggedAt: Date?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -1051,6 +1585,8 @@ struct CycleDayRecord: Codable {
         case lhTestLoggedAt = "lh_test_logged_at"
         case notes
         case hadIntimacy = "had_intimacy"
+        case temperature
+        case temperatureLoggedAt = "temperature_logged_at"
     }
     
     init(from decoder: Decoder) throws {
@@ -1063,6 +1599,7 @@ struct CycleDayRecord: Codable {
         lhTestResult = try container.decodeIfPresent(String.self, forKey: .lhTestResult)
         notes = try container.decodeIfPresent(String.self, forKey: .notes)
         hadIntimacy = try container.decodeIfPresent(Bool.self, forKey: .hadIntimacy)
+        temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
         
         // Handle flexible date formats
         let dateFormatter = DateFormatter()
@@ -1091,6 +1628,17 @@ struct CycleDayRecord: Codable {
         } else {
             lhTestLoggedAt = nil
         }
+        
+        // Parse temperatureLoggedAt (optional)
+        if let loggedAtString = try container.decodeIfPresent(String.self, forKey: .temperatureLoggedAt) {
+            if let parsedDate = iso8601Formatter.date(from: loggedAtString) {
+                temperatureLoggedAt = parsedDate
+            } else {
+                temperatureLoggedAt = nil
+            }
+        } else {
+            temperatureLoggedAt = nil
+        }
     }
 }
 
@@ -1117,6 +1665,7 @@ enum SupabaseError: LocalizedError {
     case coupleNotFound
     case invalidInviteCode
     case networkError(Error)
+    case syncFailed(String)
     
     var errorDescription: String? {
         switch self {
@@ -1132,6 +1681,8 @@ enum SupabaseError: LocalizedError {
             return "Invalid invite code"
         case .networkError(let error):
             return error.localizedDescription
+        case .syncFailed(let message):
+            return message
         }
     }
 }

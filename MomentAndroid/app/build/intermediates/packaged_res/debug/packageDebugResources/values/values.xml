@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="fertility_high">#B8D4B8</color>
+    <color name="fertility_low">#E8DFD5</color>
+    <color name="fertility_peak">#7CB87C</color>
+    <color name="moment_background">#FDF8F3</color>
+    <color name="moment_card_background">#FFFFFF</color>
+    <color name="moment_charcoal">#2C2C2C</color>
+    <color name="moment_green">#4A7C59</color>
+    <color name="moment_mist">#E5E5EA</color>
+    <color name="moment_rose">#D4A5A5</color>
+    <color name="moment_sage">#9CAF88</color>
+    <color name="moment_sand">#E8DFD5</color>
+    <color name="moment_secondary_text">#6B6B6B</color>
+    <color name="moment_teal">#5B8A8A</color>
+    <color name="moment_warm_gray">#8E8E93</color>
+    <color name="partner_high">#B8C4D4</color>
+    <color name="partner_low">#E5E5EA</color>
+    <color name="partner_peak">#8FA4C4</color>
+    <string name="app_name">Moment</string>
+    <string name="default_web_client_id">595827850702-placeholder.apps.googleusercontent.com</string>
+    <string name="gcm_defaultSenderId" translatable="false">595827850702</string>
+    <string name="google_api_key" translatable="false">AIzaSyCUya48pyaxc8v3O9x4s-T3fUGOpERu31I</string>
+    <string name="google_app_id" translatable="false">1:595827850702:android:62291d0858426fb5a2ff9f</string>
+    <string name="google_crash_reporting_api_key" translatable="false">AIzaSyCUya48pyaxc8v3O9x4s-T3fUGOpERu31I</string>
+    <string name="google_storage_bucket" translatable="false">moment-3952e.firebasestorage.app</string>
+    <string name="project_id" translatable="false">moment-3952e</string>
+    <style name="Theme.Moment" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/moment_background</item>
+        <item name="android:navigationBarColor">@color/moment_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -20,6 +20,11 @@ struct MomentApp: App {
         WindowGroup {
             ContentView()
                 .onOpenURL { url in
+                    // Handle Google Sign-In callback
+                    if GoogleSignInService.shared.handleURL(url) {
+                        return
+                    }
+                    
                     // Handle deep links for email confirmation
                     Task {
                         do {

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import PhotosUI
 
 struct SettingsView: View {
     @Bindable var viewModel: AppViewModel
@@ -31,6 +32,18 @@ struct SettingsView: View {
                     // Notifications section
                     NotificationSettingsSection(viewModel: viewModel, isWoman: isWoman)
                         .padding(.horizontal, Spacing.lg)
+                    
+                    // Cycle management section (woman only)
+                    if isWoman {
+                        CycleManagementSection(viewModel: viewModel)
+                            .padding(.horizontal, Spacing.lg)
+                    }
+                    
+                    // Optional tracking section (woman only)
+                    if isWoman {
+                        OptionalTrackingSection(viewModel: viewModel)
+                            .padding(.horizontal, Spacing.lg)
+                    }
                     
                     // App info
                     AppInfoSection()
@@ -98,6 +111,12 @@ struct ProfileSection: View {
     @State private var showingEditName = false
     @State private var editedName = ""
     @State private var isSaving = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isUploadingPhoto = false
+    
+    private var profilePhotoUrl: String? {
+        viewModel.supabaseProfile?.profilePhotoUrl
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -107,15 +126,54 @@ struct ProfileSection: View {
             
             MomentCard {
                 HStack(spacing: Spacing.md) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.momentGreen.opacity(0.2))
-                            .frame(width: 50, height: 50)
-                        
-                        Text(initials)
-                            .font(.momentSubheadline)
-                            .foregroundColor(.momentGreen)
+                    // Profile photo with picker
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        ZStack {
+                            if let photoUrl = profilePhotoUrl,
+                               let url = URL(string: photoUrl) {
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(width: 50, height: 50)
+                                            .clipShape(Circle())
+                                    case .failure(_):
+                                        initialsView
+                                    case .empty:
+                                        ProgressView()
+                                            .frame(width: 50, height: 50)
+                                    @unknown default:
+                                        initialsView
+                                    }
+                                }
+                            } else {
+                                initialsView
+                            }
+                            
+                            // Upload indicator
+                            if isUploadingPhoto {
+                                Circle()
+                                    .fill(Color.black.opacity(0.5))
+                                    .frame(width: 50, height: 50)
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                            
+                            // Camera badge
+                            Circle()
+                                .fill(Color.momentGreen)
+                                .frame(width: 18, height: 18)
+                                .overlay(
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.white)
+                                )
+                                .offset(x: 18, y: 18)
+                        }
                     }
+                    .disabled(isUploadingPhoto)
                     
                     VStack(alignment: .leading, spacing: Spacing.xxs) {
                         Text(viewModel.currentUser?.name ?? "")
@@ -153,6 +211,84 @@ struct ProfileSection: View {
             )
             .presentationDetents([.height(280)])
         }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            Task {
+                await uploadPhoto(from: newItem)
+            }
+        }
+        .task {
+            // Refresh profile to get latest photo URL
+            await viewModel.refreshProfile()
+        }
+    }
+    
+    @ViewBuilder
+    var initialsView: some View {
+        Circle()
+            .fill(Color.momentGreen.opacity(0.2))
+            .frame(width: 50, height: 50)
+            .overlay(
+                Text(initials)
+                    .font(.momentSubheadline)
+                    .foregroundColor(.momentGreen)
+            )
+    }
+    
+    func uploadPhoto(from item: PhotosPickerItem?) async {
+        guard let item = item else { return }
+        
+        isUploadingPhoto = true
+        
+        do {
+            // Load image data
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                print("❌ Could not load image data")
+                isUploadingPhoto = false
+                return
+            }
+            
+            // Compress and resize image
+            guard let image = UIImage(data: data),
+                  let compressedData = compressImage(image, maxSize: 500, quality: 0.8) else {
+                print("❌ Could not process image")
+                isUploadingPhoto = false
+                return
+            }
+            
+            // Upload to Supabase
+            let url = try await SupabaseService.shared.uploadProfilePhoto(compressedData)
+            
+            await MainActor.run {
+                // Update supabaseProfile with new photo URL
+                if var profile = viewModel.supabaseProfile {
+                    profile.profilePhotoUrl = url
+                    viewModel.supabaseProfile = profile
+                }
+                isUploadingPhoto = false
+                print("✅ Profile photo updated in UI: \(url)")
+            }
+        } catch {
+            print("❌ Error uploading photo: \(error)")
+            await MainActor.run {
+                isUploadingPhoto = false
+            }
+        }
+    }
+    
+    func compressImage(_ image: UIImage, maxSize: CGFloat, quality: CGFloat) -> Data? {
+        var actualSize = image.size
+        let ratio = maxSize / max(actualSize.width, actualSize.height)
+        
+        if ratio < 1 {
+            actualSize = CGSize(width: actualSize.width * ratio, height: actualSize.height * ratio)
+        }
+        
+        let renderer = UIGraphicsImageRenderer(size: actualSize)
+        let resizedImage = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: actualSize))
+        }
+        
+        return resizedImage.jpegData(compressionQuality: quality)
     }
     
     func saveNameChange() async {
@@ -257,8 +393,10 @@ struct EditNameSheet: View {
 struct CoupleSection: View {
     @Bindable var viewModel: AppViewModel
     @State private var showingShareSheet = false
+    @State private var showingDisconnectConfirmation = false
+    @State private var isDisconnecting = false
     @State private var supabaseCouple: Couple?
-    @State private var partnerName: String?
+    @State private var partnerProfile: Profile?
     @State private var isLoading = true
     
     var isLinked: Bool {
@@ -280,26 +418,44 @@ struct CoupleSection: View {
             
             MomentCard {
                 VStack(spacing: Spacing.md) {
-                    HStack {
+                    HStack(spacing: Spacing.md) {
                         if isLoading {
                             ProgressView()
-                                .frame(width: 20, height: 20)
+                                .frame(width: 44, height: 44)
+                        } else if isLinked {
+                            // Partner's photo
+                            partnerPhotoView
                         } else {
-                            Image(systemName: isLinked ? "link" : "link.badge.plus")
+                            Image(systemName: "link.badge.plus")
                                 .font(.system(size: 20))
-                                .foregroundColor(isLinked ? .momentGreen : .momentWarmGray)
+                                .foregroundColor(.momentWarmGray)
+                                .frame(width: 44, height: 44)
                         }
                         
                         VStack(alignment: .leading, spacing: Spacing.xxs) {
                             if isLinked {
-                                Text("Connected")
-                                    .font(.momentSubheadline)
-                                    .foregroundColor(.momentCharcoal)
-                                
-                                if let name = partnerName {
-                                    Text("with \(name)")
-                                        .font(.momentCaption)
-                                        .foregroundColor(.momentSecondaryText)
+                                HStack {
+                                    VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                        Text("Connected")
+                                            .font(.momentSubheadline)
+                                            .foregroundColor(.momentCharcoal)
+                                        
+                                        if let name = partnerProfile?.name {
+                                            Text("with \(name)")
+                                                .font(.momentCaption)
+                                                .foregroundColor(.momentSecondaryText)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Button {
+                                        showingDisconnectConfirmation = true
+                                    } label: {
+                                        Text("Disconnect")
+                                            .font(.momentCaption)
+                                            .foregroundColor(.momentWarmGray)
+                                    }
                                 }
                             } else {
                                 Text("Not connected")
@@ -318,31 +474,42 @@ struct CoupleSection: View {
                     if !isLinked, let code = supabaseCouple?.inviteCode {
                         Divider()
                         
-                        HStack {
-                            VStack(alignment: .leading, spacing: Spacing.xxs) {
-                                Text("Invite Code")
-                                    .font(.momentCaption)
-                                    .foregroundColor(.momentSecondaryText)
-                                
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("Share this code with your partner:")
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                            
+                            HStack {
+                                // Large invite code display
                                 Text(code)
-                                    .font(.momentCode)
-                                    .foregroundColor(.momentCharcoal)
-                            }
-                            
-                            Spacer()
-                            
-                            Button {
-                                showingShareSheet = true
-                            } label: {
-                                Text("Share")
-                                    .font(.momentCaptionMedium)
+                                    .font(.system(size: 28, weight: .bold, design: .monospaced))
                                     .foregroundColor(.momentGreen)
-                                    .padding(.horizontal, Spacing.md)
-                                    .padding(.vertical, Spacing.xs)
-                                    .background(
-                                        Capsule()
-                                            .fill(Color.momentGreen.opacity(0.1))
-                                    )
+                                    .tracking(4)
+                                
+                                Spacer()
+                                
+                                // Copy button
+                                Button {
+                                    UIPasteboard.general.string = code
+                                    // Show brief haptic feedback
+                                    let generator = UIImpactFeedbackGenerator(style: .light)
+                                    generator.impactOccurred()
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.system(size: 18))
+                                        .foregroundColor(.momentGreen)
+                                        .frame(width: 44, height: 44)
+                                }
+                                
+                                // Share button
+                                Button {
+                                    showingShareSheet = true
+                                } label: {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.system(size: 18))
+                                        .foregroundColor(.momentGreen)
+                                        .frame(width: 44, height: 44)
+                                }
                             }
                         }
                     }
@@ -356,9 +523,86 @@ struct CoupleSection: View {
                 ])
             }
         }
+        .alert("Disconnect Partner", isPresented: $showingDisconnectConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Disconnect", role: .destructive) {
+                Task {
+                    await disconnectPartner()
+                }
+            }
+        } message: {
+            Text("This will disconnect you from your partner. You can reconnect later using a new invite code.")
+        }
         .task {
             await fetchCouple()
         }
+    }
+    
+    private func disconnectPartner() async {
+        isDisconnecting = true
+        defer { isDisconnecting = false }
+        
+        do {
+            try await SupabaseService.shared.disconnectCouple()
+            // Refresh couple data
+            supabaseCouple = try await SupabaseService.shared.getCouple()
+            partnerProfile = nil
+            print("✅ Disconnected from partner")
+        } catch {
+            print("❌ Failed to disconnect: \(error)")
+        }
+    }
+    
+    @ViewBuilder
+    var partnerPhotoView: some View {
+        if let photoUrl = partnerProfile?.profilePhotoUrl,
+           let url = URL(string: photoUrl) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 44, height: 44)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.momentGreen, lineWidth: 2)
+                        )
+                case .failure(_), .empty:
+                    partnerInitialsView
+                @unknown default:
+                    partnerInitialsView
+                }
+            }
+        } else {
+            partnerInitialsView
+        }
+    }
+    
+    @ViewBuilder
+    var partnerInitialsView: some View {
+        Circle()
+            .fill(Color.momentGreen.opacity(0.2))
+            .frame(width: 44, height: 44)
+            .overlay(
+                Text(partnerInitials)
+                    .font(.momentSubheadline)
+                    .foregroundColor(.momentGreen)
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.momentGreen, lineWidth: 2)
+            )
+    }
+    
+    var partnerInitials: String {
+        guard let name = partnerProfile?.name else { return "?" }
+        let components = name.split(separator: " ")
+        if let first = components.first?.first {
+            return String(first).uppercased()
+        }
+        return "?"
     }
     
     func fetchCouple() async {
@@ -366,15 +610,227 @@ struct CoupleSection: View {
         do {
             supabaseCouple = try await SupabaseService.shared.getCouple()
             
-            // If linked, fetch partner's name
+            // If no couple exists, create one
+            if supabaseCouple == nil {
+                print("📝 No couple found, creating one...")
+                supabaseCouple = try await SupabaseService.shared.ensureCouple()
+            }
+            
+            // If linked, fetch partner's profile (including photo)
             if supabaseCouple?.isLinked == true {
-                partnerName = try await SupabaseService.shared.getPartnerName()
+                partnerProfile = try await SupabaseService.shared.getPartnerProfile()
             }
             print("✅ Fetched couple from Supabase: \(supabaseCouple?.inviteCode ?? "none")")
         } catch {
             print("❌ Error fetching couple: \(error)")
         }
         isLoading = false
+    }
+}
+
+// MARK: - Cycle Management Section
+
+struct CycleManagementSection: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var showingDatePicker = false
+    @State private var selectedDate = Date()
+    @State private var showingPeriodStartConfirmation = false
+    @State private var isUpdating = false
+    
+    private let calendar = Calendar.current
+    
+    var currentCycleStart: Date? {
+        viewModel.currentCycle?.startDate ?? viewModel.supabaseCycle?.startDate
+    }
+    
+    var cycleDay: Int {
+        guard let start = currentCycleStart else { return 0 }
+        let days = calendar.dateComponents([.day], from: start, to: Date()).day ?? 0
+        return days + 1
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Cycle")
+                .font(.momentCaptionMedium)
+                .foregroundColor(.momentSecondaryText)
+            
+            MomentCard {
+                VStack(spacing: Spacing.md) {
+                    // Current cycle info
+                    if let startDate = currentCycleStart {
+                        HStack {
+                            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                Text("Current cycle")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentSecondaryText)
+                                
+                                Text("Day \(cycleDay)")
+                                    .font(.momentHeadline)
+                                    .foregroundColor(.momentCharcoal)
+                            }
+                            
+                            Spacer()
+                            
+                            VStack(alignment: .trailing, spacing: Spacing.xxs) {
+                                Text("Started")
+                                    .font(.momentCaption)
+                                    .foregroundColor(.momentSecondaryText)
+                                
+                                Text(startDate, style: .date)
+                                    .font(.momentBody)
+                                    .foregroundColor(.momentCharcoal)
+                            }
+                        }
+                        
+                        Divider()
+                    }
+                    
+                    // Change cycle start date
+                    Button {
+                        selectedDate = currentCycleStart ?? Date()
+                        showingDatePicker = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "calendar.badge.clock")
+                                .font(.system(size: 18))
+                                .foregroundColor(.momentTeal)
+                            
+                            Text("Change cycle start date")
+                                .font(.momentBody)
+                                .foregroundColor(.momentCharcoal)
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14))
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                    }
+                    
+                    Divider()
+                    
+                    // Period starts now button
+                    Button {
+                        showingPeriodStartConfirmation = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "drop.fill")
+                                .font(.system(size: 18))
+                                .foregroundColor(.momentRose)
+                            
+                            Text("My period started today")
+                                .font(.momentBody)
+                                .foregroundColor(.momentCharcoal)
+                            
+                            Spacer()
+                            
+                            if isUpdating {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            }
+                        }
+                    }
+                    .disabled(isUpdating)
+                }
+            }
+        }
+        .sheet(isPresented: $showingDatePicker) {
+            DatePickerSheet(
+                title: "When did your last period start?",
+                selectedDate: $selectedDate,
+                onSave: {
+                    Task {
+                        await updateCycleStartDate(to: selectedDate)
+                    }
+                }
+            )
+        }
+        .alert("Start New Cycle", isPresented: $showingPeriodStartConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Yes, start new cycle") {
+                Task {
+                    await startNewCycle()
+                }
+            }
+        } message: {
+            Text("This will end your current cycle and start a new one from today. Your previous cycle data will be saved.")
+        }
+    }
+    
+    private func updateCycleStartDate(to newDate: Date) async {
+        isUpdating = true
+        defer { isUpdating = false }
+        
+        do {
+            try await viewModel.updateCycleStartDate(to: newDate)
+            print("✅ Cycle start date updated to \(newDate)")
+        } catch {
+            print("❌ Failed to update cycle start date: \(error)")
+        }
+    }
+    
+    private func startNewCycle() async {
+        isUpdating = true
+        defer { isUpdating = false }
+        
+        do {
+            try await viewModel.startNewCycle()
+            print("✅ New cycle started")
+        } catch {
+            print("❌ Failed to start new cycle: \(error)")
+        }
+    }
+}
+
+// MARK: - Date Picker Sheet
+
+struct DatePickerSheet: View {
+    let title: String
+    @Binding var selectedDate: Date
+    let onSave: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: Spacing.lg) {
+                Text(title)
+                    .font(.momentSubheadline)
+                    .foregroundColor(.momentCharcoal)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, Spacing.lg)
+                
+                DatePicker(
+                    "Date",
+                    selection: $selectedDate,
+                    in: ...Date(),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .padding(.horizontal, Spacing.md)
+                
+                Spacer()
+            }
+            .navigationTitle("Select Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.momentWarmGray)
+                }
+                
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave()
+                        dismiss()
+                    }
+                    .foregroundColor(.momentGreen)
+                }
+            }
+            .momentBackground()
+        }
     }
 }
 
@@ -521,6 +977,175 @@ struct NotificationPreview: View {
                 RoundedRectangle(cornerRadius: CornerRadius.medium)
                     .fill(Color.momentSand.opacity(0.5))
             )
+        }
+    }
+}
+
+// MARK: - Optional Tracking Section
+
+struct OptionalTrackingSection: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var temperatureEnabled: Bool = false
+    @State private var showingTemperatureInfo: Bool = false
+    @State private var selectedUnit: TemperatureUnit = .celsius
+    
+    init(viewModel: AppViewModel) {
+        self._viewModel = Bindable(wrappedValue: viewModel)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Optional tracking")
+                .font(.momentCaptionMedium)
+                .foregroundColor(.momentSecondaryText)
+            
+            MomentCard {
+                VStack(spacing: Spacing.md) {
+                    // Temperature tracking toggle
+                    Toggle(isOn: $temperatureEnabled) {
+                        VStack(alignment: .leading, spacing: Spacing.xxs) {
+                            Text("Track basal body temperature")
+                                .font(.momentSubheadline)
+                                .foregroundColor(.momentCharcoal)
+                            
+                            Text("Optional. Only enable this if you already track temperature and feel comfortable doing so.")
+                                .font(.momentCaption)
+                                .foregroundColor(.momentSecondaryText)
+                        }
+                    }
+                    .tint(.momentGreen)
+                    .onChange(of: temperatureEnabled) { _, newValue in
+                        if newValue {
+                            // Check if user has seen the info screen
+                            if !viewModel.hasAcknowledgedTemperatureInfo {
+                                showingTemperatureInfo = true
+                            } else {
+                                viewModel.setTemperatureTracking(enabled: true)
+                            }
+                        } else {
+                            viewModel.setTemperatureTracking(enabled: false)
+                        }
+                    }
+                    
+                    // Temperature unit picker (only shown when enabled)
+                    if temperatureEnabled {
+                        Divider()
+                        
+                        HStack {
+                            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                                Text("Temperature unit")
+                                    .font(.momentSubheadline)
+                                    .foregroundColor(.momentCharcoal)
+                            }
+                            
+                            Spacer()
+                            
+                            Picker("Unit", selection: $selectedUnit) {
+                                ForEach(TemperatureUnit.allCases, id: \.self) { unit in
+                                    Text(unit.fullName).tag(unit)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 180)
+                            .onChange(of: selectedUnit) { _, newUnit in
+                                viewModel.setTemperatureUnit(newUnit)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            temperatureEnabled = viewModel.isTemperatureTrackingEnabled
+            selectedUnit = viewModel.temperatureUnit
+        }
+        .sheet(isPresented: $showingTemperatureInfo, onDismiss: {
+            // If user dismissed without acknowledging, revert toggle
+            if !viewModel.hasAcknowledgedTemperatureInfo {
+                temperatureEnabled = false
+            }
+        }) {
+            TemperatureInfoSheet(
+                onAcknowledge: {
+                    viewModel.acknowledgeTemperatureInfo()
+                    viewModel.setTemperatureTracking(enabled: true)
+                    showingTemperatureInfo = false
+                },
+                onDismiss: {
+                    temperatureEnabled = false
+                    showingTemperatureInfo = false
+                }
+            )
+        }
+    }
+}
+
+// MARK: - Temperature Info Sheet
+
+struct TemperatureInfoSheet: View {
+    let onAcknowledge: () -> Void
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.xl) {
+                    // Title
+                    Text("About temperature tracking")
+                        .font(.momentHeadline)
+                        .foregroundColor(.momentCharcoal)
+                        .padding(.top, Spacing.lg)
+                    
+                    // Body text
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        Text("Some people choose to track basal body temperature to better understand their cycle.")
+                            .font(.momentBody)
+                            .foregroundColor(.momentCharcoal)
+                        
+                        Text("This is optional and requires daily consistency. Moment will never require temperature input and will not remind you to log it.")
+                            .font(.momentBody)
+                            .foregroundColor(.momentCharcoal)
+                        
+                        Text("Logged temperatures are used only as an additional signal to refine timing insights over time.")
+                            .font(.momentBody)
+                            .foregroundColor(.momentCharcoal)
+                    }
+                    
+                    Spacer(minLength: Spacing.xxl)
+                    
+                    // Footer
+                    Text("Moment is not a medical device.")
+                        .font(.momentCaption)
+                        .foregroundColor(.momentSecondaryText)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    
+                    // Button
+                    Button {
+                        onAcknowledge()
+                    } label: {
+                        Text("Got it")
+                            .font(.momentBodyMedium)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Spacing.md)
+                            .background(Color.momentGreen)
+                            .cornerRadius(CornerRadius.medium)
+                    }
+                    .padding(.top, Spacing.md)
+                }
+                .padding(.horizontal, Spacing.lg)
+            }
+            .momentBackground()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.momentWarmGray)
+                    }
+                }
+            }
         }
     }
 }

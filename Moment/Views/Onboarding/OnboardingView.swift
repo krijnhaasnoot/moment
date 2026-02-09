@@ -26,6 +26,10 @@ struct OnboardingView: View {
                     EnterNameView(viewModel: viewModel)
                 case .enterInviteCode:
                     EnterInviteCodeView(viewModel: viewModel)
+                case .partnerChoice:
+                    PartnerChoiceView(viewModel: viewModel)
+                case .inviteMother:
+                    InviteMotherView(viewModel: viewModel)
                 case .selectTone:
                     SelectToneView(viewModel: viewModel)
                 case .invitePartner:
@@ -160,16 +164,25 @@ struct SelectRoleView: View {
             
             Spacer()
             
-            Text("Who's setting up?")
-                .font(.momentDisplaySmall)
-                .foregroundColor(.momentCharcoal)
-                .padding(.bottom, Spacing.xxl)
+            // Header with explanation
+            VStack(spacing: Spacing.sm) {
+                Text("Who's setting up?")
+                    .font(.momentDisplaySmall)
+                    .foregroundColor(.momentCharcoal)
+                
+                Text("Moment helps couples track fertility together.\nChoose your role to get started.")
+                    .font(.momentBody)
+                    .foregroundColor(.momentSecondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.bottom, Spacing.xl)
             
             VStack(spacing: Spacing.md) {
                 RoleOptionCard(
                     icon: "person.crop.circle",
                     title: "I'm tracking my cycle",
-                    subtitle: "Log your cycle and invite your partner",
+                    subtitle: "Log your cycle, track fertility, and invite your partner to follow along",
                     isSelected: false
                 ) {
                     viewModel.selectRole(.woman)
@@ -178,13 +191,24 @@ struct SelectRoleView: View {
                 RoleOptionCard(
                     icon: "person.2.circle",
                     title: "I'm the partner",
-                    subtitle: "Join with an invite code",
+                    subtitle: "Connect with your partner's cycle and receive fertility updates",
                     isSelected: false
                 ) {
                     viewModel.selectRole(.partner)
                 }
             }
             .padding(.horizontal, Spacing.lg)
+            
+            // Helper text
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 14))
+                Text("Not sure? The person with the cycle should choose the first option.")
+                    .font(.momentCaption)
+            }
+            .foregroundColor(.momentWarmGray)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.lg)
             
             Spacer()
             Spacer()
@@ -211,7 +235,7 @@ struct RoleOptionCard: View {
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: Spacing.md) {
+            HStack(alignment: .center, spacing: Spacing.md) {
                 Image(systemName: icon)
                     .font(.system(size: 28))
                     .foregroundColor(.momentGreen)
@@ -225,9 +249,11 @@ struct RoleOptionCard: View {
                     Text(subtitle)
                         .font(.momentCaption)
                         .foregroundColor(.momentSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
                 }
                 
-                Spacer()
+                Spacer(minLength: Spacing.sm)
                 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 14, weight: .semibold))
@@ -315,21 +341,24 @@ struct EnterNameView: View {
     }
 }
 
-// MARK: - Enter Invite Code Screen (Partner)
+// MARK: - Connection Choice Screen
 
 /*
- SCREEN: Enter Invite Code
- PURPOSE: Allow partner to join couple
- COPY EXAMPLE:
- 
- Title: "Enter your invite code"
- Subtitle: "Ask your partner for the 6-digit code"
- Placeholder: "XXXXXX"
+ SCREEN: Connection Choice
+ PURPOSE: Let user choose to join with code OR create an invite
+ Works for both woman and partner roles
 */
 
-struct EnterInviteCodeView: View {
+struct PartnerChoiceView: View {
     @Bindable var viewModel: AppViewModel
-    @FocusState private var isFocused: Bool
+    
+    private var isWoman: Bool {
+        viewModel.selectedRole == .woman
+    }
+    
+    private var inviteTitle: String {
+        isWoman ? "I'll start tracking" : "I'll invite my partner"
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -347,6 +376,125 @@ struct EnterInviteCodeView: View {
                     .foregroundColor(.momentWarmGray)
                 }
                 Spacer()
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.md)
+            
+            Spacer()
+            
+            // Header with explanation
+            VStack(spacing: Spacing.sm) {
+                Text("How would you like\nto connect?")
+                    .font(.momentDisplaySmall)
+                    .foregroundColor(.momentCharcoal)
+                    .multilineTextAlignment(.center)
+                
+                Text(isWoman 
+                    ? "Connect with your partner to share your fertility updates."
+                    : "Connect with your partner to follow their fertility journey.")
+                    .font(.momentBody)
+                    .foregroundColor(.momentSecondaryText)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.bottom, Spacing.xl)
+            
+            VStack(spacing: Spacing.md) {
+                RoleOptionCard(
+                    icon: "envelope.open",
+                    title: "I have an invite code",
+                    subtitle: "Your partner already set up Moment and shared a 6-digit code with you",
+                    isSelected: false
+                ) {
+                    viewModel.chooseJoinWithCode()
+                }
+                
+                RoleOptionCard(
+                    icon: isWoman ? "calendar.badge.plus" : "person.badge.plus",
+                    title: inviteTitle,
+                    subtitle: isWoman 
+                        ? "Start fresh and create a code to invite your partner later"
+                        : "Create a code and share it with your partner to connect",
+                    isSelected: false
+                ) {
+                    viewModel.chooseCreateInvite()
+                }
+            }
+            .padding(.horizontal, Spacing.lg)
+            
+            // Helper text
+            HStack(spacing: Spacing.xs) {
+                Image(systemName: "lightbulb")
+                    .font(.system(size: 14))
+                Text(isWoman 
+                    ? "Tip: If you're the first one setting up, choose the second option."
+                    : "Tip: If your partner hasn't set up yet, choose the second option.")
+                    .font(.momentCaption)
+            }
+            .foregroundColor(.momentWarmGray)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.lg)
+            
+            Spacer()
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Enter Invite Code Screen (Partner)
+
+/*
+ SCREEN: Enter Invite Code
+ PURPOSE: Allow partner to join couple
+ COPY EXAMPLE:
+ 
+ Title: "Enter your invite code"
+ Subtitle: "Ask your partner for the 6-digit code"
+ Placeholder: "XXXXXX"
+*/
+
+struct EnterInviteCodeView: View {
+    @Bindable var viewModel: AppViewModel
+    @FocusState private var isFocused: Bool
+    
+    var roleDescription: String {
+        viewModel.selectedRole == .woman 
+            ? "Tracking my cycle" 
+            : "Partner"
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Back button and role indicator
+            HStack {
+                Button {
+                    viewModel.goBackInOnboarding()
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Back")
+                            .font(.momentBody)
+                    }
+                    .foregroundColor(.momentWarmGray)
+                }
+                
+                Spacer()
+                
+                // Show current role
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: viewModel.selectedRole == .woman ? "person.fill" : "person.2.fill")
+                        .font(.system(size: 12))
+                    Text(roleDescription)
+                        .font(.momentCaption)
+                }
+                .foregroundColor(.momentGreen)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xxs)
+                .background(
+                    Capsule()
+                        .fill(Color.momentGreen.opacity(0.1))
+                )
             }
             .padding(.horizontal, Spacing.lg)
             .padding(.top, Spacing.md)
@@ -400,6 +548,7 @@ struct EnterInviteCodeView: View {
                         .font(.momentCaption)
                         .foregroundColor(.momentRose)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, Spacing.lg)
                 }
                 
@@ -547,8 +696,47 @@ struct InvitePartnerView: View {
     @Bindable var viewModel: AppViewModel
     @State private var showingShareSheet = false
     
+    var roleDescription: String {
+        viewModel.selectedRole == .woman 
+            ? "Tracking my cycle" 
+            : "Partner"
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
+            // Back button and role indicator
+            HStack {
+                Button {
+                    viewModel.onboardingStep = .selectRole
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                    .font(.momentBody)
+                    .foregroundColor(.momentWarmGray)
+                }
+                
+                Spacer()
+                
+                // Show current role
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: viewModel.selectedRole == .woman ? "person.fill" : "person.2.fill")
+                        .font(.system(size: 12))
+                    Text(roleDescription)
+                        .font(.momentCaption)
+                }
+                .foregroundColor(.momentGreen)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xxs)
+                .background(
+                    Capsule()
+                        .fill(Color.momentGreen.opacity(0.1))
+                )
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.md)
+            
             Spacer()
             
             Text("Invite your partner")
@@ -556,9 +744,11 @@ struct InvitePartnerView: View {
                 .foregroundColor(.momentCharcoal)
                 .padding(.bottom, Spacing.xs)
             
-            Text("Share this code so they can join you")
+            Text("Share this code so they can join and start tracking")
                 .font(.momentBody)
                 .foregroundColor(.momentSecondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.lg)
                 .padding(.bottom, Spacing.xl)
             
             // Invite code card
@@ -600,9 +790,132 @@ struct InvitePartnerView: View {
                 }
                 .buttonStyle(MomentPrimaryButtonStyle())
                 
-                Text("You can always share the code later in Settings")
+                Text("Your partner will need to download Moment and use this code")
                     .font(.system(size: 12))
                     .foregroundColor(.momentWarmGray)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, Spacing.xs)
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.bottom, Spacing.xxl)
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            ShareSheet(items: [
+                "Join me on Moment! Use this code: \(viewModel.partnerInviteCode)"
+            ])
+        }
+    }
+}
+
+// MARK: - Invite Mother Screen (Partner)
+
+/*
+ SCREEN: Invite Mother
+ PURPOSE: Partner shares invite code with woman
+*/
+
+struct InviteMotherView: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var showingShareSheet = false
+    
+    var roleDescription: String {
+        viewModel.selectedRole == .woman 
+            ? "Tracking my cycle" 
+            : "Partner"
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Back button and role indicator
+            HStack {
+                Button {
+                    viewModel.onboardingStep = .selectRole
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                    .font(.momentBody)
+                    .foregroundColor(.momentWarmGray)
+                }
+                
+                Spacer()
+                
+                // Show current role
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: viewModel.selectedRole == .woman ? "person.fill" : "person.2.fill")
+                        .font(.system(size: 12))
+                    Text(roleDescription)
+                        .font(.momentCaption)
+                }
+                .foregroundColor(.momentGreen)
+                .padding(.horizontal, Spacing.sm)
+                .padding(.vertical, Spacing.xxs)
+                .background(
+                    Capsule()
+                        .fill(Color.momentGreen.opacity(0.1))
+                )
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.top, Spacing.md)
+            
+            Spacer()
+            
+            Text("Invite your partner")
+                .font(.momentDisplaySmall)
+                .foregroundColor(.momentCharcoal)
+                .padding(.bottom, Spacing.xs)
+            
+            Text("Share this code so they can join and start tracking")
+                .font(.momentBody)
+                .foregroundColor(.momentSecondaryText)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.lg)
+                .padding(.bottom, Spacing.xl)
+            
+            // Invite code card
+            MomentCard {
+                VStack(spacing: Spacing.md) {
+                    Text("Your invite code")
+                        .font(.momentCaption)
+                        .foregroundColor(.momentSecondaryText)
+                    
+                    Text(viewModel.partnerInviteCode)
+                        .font(.momentCode)
+                        .foregroundColor(.momentCharcoal)
+                        .kerning(4)
+                    
+                    Button {
+                        UIPasteboard.general.string = viewModel.partnerInviteCode
+                    } label: {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Copy")
+                        }
+                        .font(.momentCaptionMedium)
+                        .foregroundColor(.momentGreen)
+                    }
+                }
+            }
+            .padding(.horizontal, Spacing.lg)
+            
+            Spacer()
+            
+            VStack(spacing: Spacing.md) {
+                Button("Share Code") {
+                    showingShareSheet = true
+                }
+                .buttonStyle(MomentSecondaryButtonStyle())
+                
+                Button("Continue") {
+                    viewModel.finishPartnerInviteOnboarding()
+                }
+                .buttonStyle(MomentPrimaryButtonStyle())
+                
+                Text("Your partner will need to download Moment and use this code")
+                    .font(.system(size: 12))
+                    .foregroundColor(.momentWarmGray)
+                    .multilineTextAlignment(.center)
                     .padding(.top, Spacing.xs)
             }
             .padding(.horizontal, Spacing.lg)

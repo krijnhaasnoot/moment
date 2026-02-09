@@ -82,12 +82,13 @@ struct NotificationLogicTests {
         #expect(lhPositiveIsException == true)
     }
     
-    @Test("LH reminder only during fertile window")
-    func lhReminderOnlyInFertileWindow() {
+    @Test("Fertile window days exist for LH logging opportunity")
+    func fertileWindowDaysExist() {
+        // LH logging is manual (no push reminders), but fertile window should exist
+        // so users can see when to log if they choose to
         var cycle = Cycle(userId: UUID(), startDate: Date(), cycleLength: 28)
         cycle.generateDays()
         
-        // Check that LH reminders would only be sent during fertile window
         let fertileWindowDays = cycle.days.filter { 
             $0.fertilityLevel == .high || $0.fertilityLevel == .peak 
         }

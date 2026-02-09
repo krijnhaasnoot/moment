@@ -1,6 +1,7 @@
 // Supabase Edge Function: Send Daily Fertility Notifications
 // Scheduled via pg_cron to run daily at 8:00 AM
-// Sends personalized notifications to all users
+// Sends personalized notifications ONLY on high/peak fertility days
+// Uses varied messages to keep notifications fresh and interesting
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -15,28 +16,93 @@ interface NotificationContent {
   body: string
 }
 
-// Get notification content for woman
-function getWomanNotification(fertilityLevel: string): NotificationContent {
-  switch (fertilityLevel) {
-    case 'peak':
-      return {
-        title: 'Moment',
-        body: 'Peak fertility today — your most fertile time'
-      }
-    case 'high':
-      return {
-        title: 'Moment',
-        body: 'High fertility window — good timing ahead'
-      }
-    default:
-      return {
-        title: 'Moment',
-        body: 'Low fertility — rest and prepare'
-      }
+// Varied messages for women - HIGH fertility
+const womanHighMessages = [
+  "Je vruchtbare periode is begonnen 🌸",
+  "Fertility window open — timing is goed de komende dagen",
+  "Hoge vruchtbaarheid vandaag — je lichaam bereidt zich voor",
+  "De komende dagen zijn gunstig ✨",
+  "Je bent in je vruchtbare venster aangekomen",
+  "Goede timing de komende 3-4 dagen",
+]
+
+// Varied messages for women - PEAK fertility
+const womanPeakMessages = [
+  "Piek vruchtbaarheid vandaag — je meest vruchtbare moment 🎯",
+  "Dit is het! Je meest vruchtbare dag",
+  "Ovulatie komt eraan — ideale timing vandaag",
+  "Peak fertility — nu of nooit deze cyclus ⭐",
+  "Je lichaam is klaar — vandaag is de dag",
+  "Maximale vruchtbaarheid bereikt",
+]
+
+// Varied messages for partner - HIGH fertility (explicit)
+const partnerHighExplicitMessages = [
+  "Vruchtbare periode begonnen — goed moment om te connecten",
+  "High fertility — de komende dagen zijn gunstig",
+  "Het vruchtbare venster is open 💫",
+  "Timing is goed deze week",
+]
+
+// Varied messages for partner - HIGH fertility (discreet)
+const partnerHighDiscreetMessages = [
+  "Goed moment om te connecten met je partner",
+  "Quality time deze week ✨",
+  "Mooie dagen om samen door te brengen",
+  "Check in met je partner vandaag",
+]
+
+// Varied messages for partner - PEAK fertility (explicit)
+const partnerPeakExplicitMessages = [
+  "Peak fertility vandaag — het moment is daar 🎯",
+  "Dit is de dag — maximale kans",
+  "Ideale timing — vandaag telt het meest",
+  "Nu of nooit deze cyclus ⭐",
+]
+
+// Varied messages for partner - PEAK fertility (discreet)
+const partnerPeakDiscreetMessages = [
+  "Belangrijk moment — neem de tijd samen",
+  "Vandaag is een bijzondere dag 💫",
+  "Check-in tijd — maak er iets moois van",
+  "Quality time vandaag ✨",
+]
+
+// Fun fertility facts (optional, can be added to some messages)
+const fertilityFacts = [
+  "Wist je dat: Een eicel maar 12-24 uur leeft na de ovulatie",
+  "Wist je dat: Zaadcellen kunnen tot 5 dagen overleven",
+  "Wist je dat: Stress je cyclus kan beïnvloeden",
+  "Wist je dat: Je lichaamstemperatuur stijgt na de ovulatie",
+  "Wist je dat: De kans op zwangerschap per cyclus ~20-25% is",
+]
+
+function getRandomMessage(messages: string[]): string {
+  return messages[Math.floor(Math.random() * messages.length)]
+}
+
+// Get notification content for woman (ONLY high/peak)
+function getWomanNotification(fertilityLevel: string): NotificationContent | null {
+  // Only notify on HIGH or PEAK days - no more boring "low fertility" messages
+  if (fertilityLevel === 'low') {
+    return null
+  }
+
+  if (fertilityLevel === 'peak') {
+    return {
+      title: 'Moment',
+      body: getRandomMessage(womanPeakMessages)
+    }
+  }
+
+  // High fertility
+  return {
+    title: 'Moment',
+    body: getRandomMessage(womanHighMessages)
   }
 }
 
-// Get notification content for partner
+// Get notification content for partner (ONLY high/peak)
 function getPartnerNotification(fertilityLevel: string, tone: string): NotificationContent | null {
   // Partners only get notifications for high/peak fertility
   if (fertilityLevel === 'low') {
@@ -48,18 +114,14 @@ function getPartnerNotification(fertilityLevel: string, tone: string): Notificat
   if (fertilityLevel === 'peak') {
     return {
       title: 'Moment',
-      body: isExplicit 
-        ? 'Peak fertility today — great timing'
-        : 'Check-in time — connect with your partner'
+      body: getRandomMessage(isExplicit ? partnerPeakExplicitMessages : partnerPeakDiscreetMessages)
     }
   }
 
   // High fertility
   return {
     title: 'Moment',
-    body: isExplicit 
-      ? 'High fertility window — consider connecting today'
-      : 'Good time to connect'
+    body: getRandomMessage(isExplicit ? partnerHighExplicitMessages : partnerHighDiscreetMessages)
   }
 }
 
@@ -75,6 +137,7 @@ serve(async (req) => {
 
     const today = new Date().toISOString().split('T')[0]
     let notificationsSent = 0
+    let skippedLowFertility = 0
 
     // Get all active cycles with today's data
     const { data: cycles, error: cyclesError } = await supabase
@@ -108,21 +171,25 @@ serve(async (req) => {
       const woman = cycle.profiles
       const couple = cycle.couples
 
-      // Send notification to woman
+      // Send notification to woman (only if high/peak)
       if (woman?.notifications_enabled && woman?.push_token) {
         const notification = getWomanNotification(fertilityLevel)
         
-        await sendPushNotification(woman.push_token, notification)
-        
-        await supabase
-          .from('notification_log')
-          .insert({
-            user_id: woman.id,
-            type: 'daily_fertility',
-            content: notification.body
-          })
-        
-        notificationsSent++
+        if (notification) {
+          await sendPushNotification(woman.push_token, notification)
+          
+          await supabase
+            .from('notification_log')
+            .insert({
+              user_id: woman.id,
+              type: 'daily_fertility',
+              content: notification.body
+            })
+          
+          notificationsSent++
+        } else {
+          skippedLowFertility++
+        }
       }
 
       // Send notification to partner (if linked and high/peak)
@@ -156,7 +223,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: `Sent ${notificationsSent} notifications` 
+        message: `Sent ${notificationsSent} notifications (skipped ${skippedLowFertility} low fertility days)` 
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )

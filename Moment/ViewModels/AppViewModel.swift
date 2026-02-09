@@ -61,6 +61,17 @@ final class AppViewModel {
     var todaysCycleDay: CycleDay? { dataService.getTodaysCycleDay() }
     var isInFertileWindow: Bool { dataService.isInFertileWindow() }
     
+    // Temperature tracking (optional feature, OFF by default)
+    var isTemperatureTrackingEnabled: Bool {
+        supabaseProfile?.temperatureTrackingEnabled ?? false
+    }
+    var hasAcknowledgedTemperatureInfo: Bool {
+        supabaseProfile?.temperatureInfoAcknowledged ?? false
+    }
+    var temperatureUnit: TemperatureUnit {
+        TemperatureUnit(rawValue: supabaseProfile?.temperatureUnit ?? "celsius") ?? .celsius
+    }
+    
     var actionCard: ActionCard? {
         guard let user = currentUser,
               let cycleDay = todaysCycleDay else { return nil }
@@ -132,10 +143,16 @@ final class AppViewModel {
         isCheckingAuth = true
         
         // Check if user is authenticated with Supabase
-        if supabaseService.client.auth.currentSession != nil {
+        let hasSession = supabaseService.client.auth.currentSession != nil
+        let userId = supabaseService.client.auth.currentSession?.user.id
+        print("🔐 checkAuthState: hasSession=\(hasSession), userId=\(userId?.uuidString ?? "nil")")
+        
+        if hasSession {
             // User is logged in, check if they have a profile
             do {
+                print("🔐 Fetching profile...")
                 let profile = try await supabaseService.getProfile()
+                print("✅ Profile found: name=\(profile.name), role=\(profile.role)")
                 supabaseProfile = profile
                 
                 // Sync to local storage for offline support
@@ -201,12 +218,29 @@ final class AppViewModel {
                     await pushService.requestPermissionAndRegister()
                 }
             } catch {
-                // Profile doesn't exist, needs onboarding
-                currentScreen = .onboarding
-                onboardingStep = .selectRole
+                // Check if this is a "no rows returned" error (profile truly doesn't exist)
+                // vs a network/deserialization error
+                let errorDescription = String(describing: error).lowercased()
+                
+                if errorDescription.contains("no rows") || 
+                   errorDescription.contains("0 rows returned") ||
+                   errorDescription.contains("pgrst116") {
+                    // Profile doesn't exist, needs onboarding
+                    print("📝 Profile doesn't exist, starting onboarding")
+                    currentScreen = .onboarding
+                    onboardingStep = .selectRole
+                } else {
+                    // Other error (network, deserialization, etc.)
+                    // Log and show auth screen to let user try again
+                    print("❌ Error loading profile: \(error)")
+                    print("   Error type: \(type(of: error))")
+                    print("   Description: \(errorDescription)")
+                    currentScreen = .auth
+                }
             }
         } else {
             // Not authenticated
+            print("🔐 checkAuthState: No session found, going to auth screen")
             currentScreen = .auth
         }
         
@@ -250,11 +284,21 @@ final class AppViewModel {
     
     func selectRole(_ role: UserRole) {
         selectedRole = role
+        // Both roles see the choice: join with code OR create invite
         if role == .woman {
-            onboardingStep = .enterName
+            // Woman can start fresh (create invite) or join partner's invite
+            onboardingStep = .partnerChoice  // Reusing this screen for both
         } else {
-            onboardingStep = .enterInviteCode
+            onboardingStep = .partnerChoice
         }
+    }
+    
+    func chooseJoinWithCode() {
+        onboardingStep = .enterInviteCode
+    }
+    
+    func chooseCreateInvite() {
+        onboardingStep = .enterName
     }
     
     func goBackInOnboarding() {
@@ -264,9 +308,13 @@ final class AppViewModel {
         case .selectRole:
             onboardingStep = .welcome
         case .enterName:
-            onboardingStep = .selectRole
+            onboardingStep = .partnerChoice
         case .enterInviteCode:
+            onboardingStep = .partnerChoice
+        case .partnerChoice:
             onboardingStep = .selectRole
+        case .inviteMother:
+            onboardingStep = .enterName
         case .selectTone:
             onboardingStep = .enterName
         case .invitePartner:
@@ -398,7 +446,129 @@ final class AppViewModel {
                 }
             }
         } else {
-            // Partner flow handled in joinWithInviteCode
+            // Partner creating an invite for the mother
+            isCreatingProfile = true
+            profileError = nil
+            
+            Task {
+                do {
+                    guard let userId = supabaseService.client.auth.currentUser?.id else {
+                        await MainActor.run {
+                            profileError = "Not signed in"
+                            isCreatingProfile = false
+                        }
+                        return
+                    }
+                    
+                    print("📝 Creating partner profile for user: \(userId)")
+                    
+                    // Check if profile already exists
+                    let existingProfile: Profile? = try? await supabaseService.client
+                        .from("profiles")
+                        .select()
+                        .eq("id", value: userId.uuidString)
+                        .single()
+                        .execute()
+                        .value
+                    
+                    var createdProfile: Profile
+                    
+                    if let existing = existingProfile {
+                        print("✅ Profile already exists, using existing")
+                        createdProfile = existing
+                    } else {
+                        // Create partner profile
+                        let profile = ProfileInsert(
+                            id: userId,
+                            name: userName,
+                            role: UserRole.partner.rawValue,
+                            notificationTone: "discreet",
+                            notificationsEnabled: true
+                        )
+                        
+                        createdProfile = try await supabaseService.client
+                            .from("profiles")
+                            .insert(profile)
+                            .select()
+                            .single()
+                            .execute()
+                            .value
+                        
+                        print("✅ Partner profile created")
+                    }
+                    
+                    // Check if couple already exists for this partner
+                    var finalInviteCode: String
+                    
+                    let existingCouple: Couple? = try? await supabaseService.client
+                        .from("couples")
+                        .select()
+                        .eq("partner_id", value: userId.uuidString)
+                        .single()
+                        .execute()
+                        .value
+                    
+                    if let couple = existingCouple {
+                        print("✅ Couple already exists with code: \(couple.inviteCode)")
+                        finalInviteCode = couple.inviteCode
+                    } else {
+                        finalInviteCode = generateInviteCode()
+                        
+                        // Partner creates couple - woman_id is null, partner_id is set
+                        struct PartnerCoupleInsert: Encodable {
+                            let partner_id: String
+                            let created_by: String
+                            let invite_code: String
+                        }
+                        
+                        let coupleData = PartnerCoupleInsert(
+                            partner_id: userId.uuidString,
+                            created_by: userId.uuidString,
+                            invite_code: finalInviteCode
+                        )
+                        
+                        let createdCouple: Couple = try await supabaseService.client
+                            .from("couples")
+                            .insert(coupleData)
+                            .select()
+                            .single()
+                            .execute()
+                            .value
+                        
+                        print("✅ Couple created by partner with code: \(finalInviteCode)")
+                        
+                        // Update profile with couple_id
+                        struct ProfileCoupleUpdate: Encodable {
+                            let couple_id: String
+                        }
+                        
+                        try await supabaseService.client
+                            .from("profiles")
+                            .update(ProfileCoupleUpdate(couple_id: createdCouple.id.uuidString))
+                            .eq("id", value: userId.uuidString)
+                            .execute()
+                        
+                        print("✅ Partner profile linked to couple")
+                    }
+                    
+                    // Create local user for offline support
+                    _ = dataService.createUser(name: userName, role: .partner)
+                    
+                    await MainActor.run {
+                        supabaseProfile = createdProfile
+                        partnerInviteCode = finalInviteCode
+                        isCreatingProfile = false
+                        onboardingStep = .inviteMother
+                    }
+                    
+                } catch {
+                    print("❌ Error: \(error)")
+                    await MainActor.run {
+                        profileError = "Error: \(error.localizedDescription)"
+                        isCreatingProfile = false
+                    }
+                }
+            }
         }
     }
     
@@ -434,6 +604,9 @@ final class AppViewModel {
                 
                 print("🔄 Starting join process for user: \(userId)")
                 
+                // Determine the role based on selectedRole
+                let role = selectedRole
+                
                 // Check if profile already exists in database
                 let existingProfile: Profile? = try? await supabaseService.client
                     .from("profiles")
@@ -446,11 +619,11 @@ final class AppViewModel {
                 if existingProfile != nil {
                     print("✅ Profile already exists, skipping creation")
                 } else {
-                    print("📝 Creating new partner profile...")
+                    print("📝 Creating new \(role.rawValue) profile...")
                     let profile = ProfileInsert(
                         id: userId,
                         name: userName,
-                        role: UserRole.partner.rawValue,
+                        role: role.rawValue,
                         notificationTone: "discreet",
                         notificationsEnabled: true
                     )
@@ -470,6 +643,9 @@ final class AppViewModel {
                     }
                 }
                 
+                // Create local user for offline support
+                _ = dataService.createUser(name: userName, role: role)
+                
                 // Join the couple using the invite code
                 print("🔗 Joining couple with code: \(inviteCode)")
                 let result = try await supabaseService.joinCouple(inviteCode: inviteCode)
@@ -480,7 +656,12 @@ final class AppViewModel {
                     isJoining = false
                     if result.success {
                         print("✅ Successfully joined couple!")
-                        completeOnboarding()
+                        // If woman joined, they need to set up their cycle
+                        if role == .woman {
+                            onboardingStep = .selectTone
+                        } else {
+                            completeOnboarding()
+                        }
                     } else {
                         joinError = result.error ?? "Invalid invite code"
                     }
@@ -496,6 +677,12 @@ final class AppViewModel {
     }
     
     func skipPartnerInvite() {
+        completeOnboarding()
+    }
+    
+    func finishPartnerInviteOnboarding() {
+        // Partner created an invite for the mother - complete onboarding
+        // They'll wait for the mother to join using the code
         completeOnboarding()
     }
     
@@ -559,21 +746,34 @@ final class AppViewModel {
         showingLogPeriod = false
         
         // Save locally (synchronous, quick operation)
+        // This also triggers luteal phase learning from the previous cycle's LH data
         let localCycle = dataService.startNewCycle(startDate: startDate)
         
         // Schedule notifications
         notificationService.scheduleDailyNotifications()
         notificationService.sendCycleStartNotification()
+        // Cancel any pending pregnancy test reminder (new cycle = test no longer relevant)
+        notificationService.cancelPregnancyTestReminder()
         
         // Sync to Supabase in background
         Task {
             do {
+                // First sync luteal learning if we have data
+                if let user = dataService.currentUser, user.lutealSamples > 0 {
+                    try await supabaseService.updateLutealLearning(
+                        averageLutealLength: user.averageLutealLength,
+                        lutealSamples: user.lutealSamples
+                    )
+                }
+                
+                // Create cycle with personalized luteal length
                 let remoteCycle = try await supabaseService.createCycle(
                     startDate: startDate,
-                    cycleLength: localCycle.cycleLength
+                    cycleLength: localCycle.cycleLength,
+                    lutealLength: localCycle.lutealLength
                 )
                 supabaseCycle = remoteCycle
-                print("✅ Cycle synced to Supabase")
+                print("✅ Cycle synced to Supabase (luteal=\(localCycle.lutealLength)d)")
             } catch {
                 print("❌ Failed to sync cycle to Supabase: \(error)")
                 // Queue for later if offline
@@ -582,7 +782,8 @@ final class AppViewModel {
                     networkService.queueOperation(
                         PendingOperation(type: .createCycle, data: [
                             "startDate": ISO8601DateFormatter().string(from: startDate),
-                            "cycleLength": String(localCycle.cycleLength)
+                            "cycleLength": String(localCycle.cycleLength),
+                            "lutealLength": String(localCycle.lutealLength)
                         ])
                     )
                 }
@@ -593,6 +794,33 @@ final class AppViewModel {
     func logMenstruation(date: Date = Date()) {
         // Starting new cycle
         startNewCycle(startDate: date)
+    }
+    
+    /// Start a new cycle from today (convenience wrapper)
+    func startNewCycle() async throws {
+        startNewCycle(startDate: Date())
+    }
+    
+    /// Update the start date of the current cycle
+    func updateCycleStartDate(to newDate: Date) async throws {
+        guard let cycle = supabaseCycle else {
+            throw NSError(domain: "Moment", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active cycle"])
+        }
+        
+        print("📅 Updating cycle start date from \(cycle.startDate) to \(newDate)")
+        
+        // Update in Supabase
+        try await supabaseService.updateCycleStartDate(cycleId: cycle.id, newStartDate: newDate)
+        
+        // Refresh cycle data
+        if let updatedCycle = try await supabaseService.getActiveCycle() {
+            await MainActor.run {
+                supabaseCycle = updatedCycle
+                syncCycleToLocal(updatedCycle)
+            }
+        }
+        
+        print("✅ Cycle start date updated")
     }
     
     // MARK: - LH Test
@@ -761,6 +989,62 @@ final class AppViewModel {
         }
     }
     
+    // MARK: - Temperature Tracking (Optional)
+    // Note: Temperature tracking is an optional, user-initiated feature.
+    // It is OFF by default and never pushes notifications or reminds the user.
+    // Temperature data is stored but NOT currently used for fertility predictions.
+    
+    func setTemperatureTracking(enabled: Bool) {
+        Task {
+            do {
+                try await supabaseService.updateProfile(
+                    ProfileUpdate(temperatureTrackingEnabled: enabled)
+                )
+                // Refresh profile to update local state
+                await refreshProfile()
+                print("✅ Temperature tracking \(enabled ? "enabled" : "disabled")")
+            } catch {
+                print("❌ Failed to update temperature tracking: \(error)")
+            }
+        }
+    }
+    
+    func acknowledgeTemperatureInfo() {
+        Task {
+            do {
+                try await supabaseService.updateProfile(
+                    ProfileUpdate(temperatureInfoAcknowledged: true)
+                )
+                // Refresh profile to update local state
+                await refreshProfile()
+                print("✅ Temperature info acknowledged")
+            } catch {
+                print("❌ Failed to acknowledge temperature info: \(error)")
+            }
+        }
+    }
+    
+    func setTemperatureUnit(_ unit: TemperatureUnit) {
+        Task {
+            do {
+                try await supabaseService.updateProfile(
+                    ProfileUpdate(temperatureUnit: unit.rawValue)
+                )
+                // Refresh profile to update local state
+                await refreshProfile()
+                print("✅ Temperature unit set to \(unit.fullName)")
+            } catch {
+                print("❌ Failed to update temperature unit: \(error)")
+            }
+        }
+    }
+    
+    /// Log temperature for a given date
+    /// Temperature is stored in Celsius internally
+    func logTemperature(_ temperature: Double, for date: Date = Date()) {
+        dataService.logTemperature(temperature, for: date)
+    }
+    
     func resetApp() async {
         // Delete Supabase data first
         do {
@@ -783,6 +1067,20 @@ final class AppViewModel {
             // localCouple is computed from dataService.couple, which is cleared by resetAllData()
         }
     }
+    
+    /// Refresh profile from Supabase (for getting updated photo URL, etc.)
+    @MainActor
+    func refreshProfile() async {
+        guard networkService.isConnected else { return }
+        
+        do {
+            let profile = try await supabaseService.getProfile()
+            supabaseProfile = profile
+            print("✅ Profile refreshed, photo URL: \(profile.profilePhotoUrl ?? "none")")
+        } catch {
+            print("⚠️ Failed to refresh profile: \(error)")
+        }
+    }
 }
 
 // MARK: - App Navigation
@@ -799,7 +1097,9 @@ enum OnboardingStep {
     case welcome
     case selectRole
     case enterName
-    case enterInviteCode  // Partner only
+    case enterInviteCode  // Partner joining with code
+    case partnerChoice    // Partner: join or invite
+    case inviteMother     // Partner inviting mother
     case selectTone       // Woman only
     case invitePartner    // Woman only
 }

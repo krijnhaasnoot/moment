@@ -1,0 +1,33 @@
+R_DEF: Internal format may change without notice
+local
+color fertility_high
+color fertility_low
+color fertility_peak
+color moment_background
+color moment_card_background
+color moment_charcoal
+color moment_green
+color moment_mist
+color moment_rose
+color moment_sage
+color moment_sand
+color moment_secondary_text
+color moment_teal
+color moment_warm_gray
+color partner_high
+color partner_low
+color partner_peak
+drawable ic_google
+drawable ic_launcher_background
+drawable ic_launcher_foreground
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+string default_web_client_id
+string gcm_defaultSenderId
+string google_api_key
+string google_app_id
+string google_crash_reporting_api_key
+string google_storage_bucket
+string project_id
+style Theme.Moment

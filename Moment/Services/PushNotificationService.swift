@@ -118,7 +118,7 @@ final class PushNotificationService: NSObject {
             NotificationCenter.default.post(name: .navigateToToday, object: nil)
             
         case "lh_reminder":
-            // Open LH logging sheet
+            // Legacy: LH reminders are no longer scheduled, but handle old notifications gracefully
             NotificationCenter.default.post(name: .openLHLogging, object: nil)
             
         default:
